@@ -125,7 +125,6 @@ button:active { transform: translateY(1px); }
 .card-kv { font-size: 13px; }
 .card-kv dd { font-family: inherit; word-break: break-all; }
 .card-kv code { font-size: 12px; }
-.card-kv .matchkey { font-size: 13px; font-weight: 600; color: var(--accent); }
 .note-text { color: var(--warn); }
 
 table.records { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }

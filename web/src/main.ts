@@ -1,6 +1,6 @@
 import "./style.css";
 import { BridgeClient } from "../../client/src/client.js";
-import { TNF_NAMES, describeRecord, matchKey, type NdefRecord } from "../../client/src/ndef.js";
+import { TNF_NAMES, describeRecord, type NdefRecord } from "../../client/src/ndef.js";
 import { eraseNdef, isType2, readNdef, toHex, writeNdef, type CapabilityContainer } from "../../client/src/ntag.js";
 import { entryToRecord, parseApduLines, usage, type Entry } from "./builder.js";
 
@@ -149,7 +149,7 @@ function renderReaders(): void {
   }
 }
 
-/** Labelled facts about the card: UID, ATR, chip, NDEF status, match key. */
+/** Labelled facts about the card: UID, ATR, chip, NDEF status. */
 function cardFacts(uid: string | null, atr: string, view: CardView | undefined): HTMLElement {
   const dl = el("dl", "kv card-kv");
   const row = (term: string, value: string | HTMLElement) => {
@@ -170,8 +170,6 @@ function cardFacts(uid: string | null, atr: string, view: CardView | undefined):
   } else if (view.records) {
     const n = view.records.length;
     row("NDEF", n ? `${n} record${n === 1 ? "" : "s"}` : "empty");
-    const key = matchKey(view.records);
-    if (key !== null) row("Match key", el("code", "matchkey", key));
   }
   return dl;
 }
