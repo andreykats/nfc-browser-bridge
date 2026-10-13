@@ -6,4 +6,4 @@ members = ["crates/bridge-core", "crates/bridge-app"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
-repository = "https://github.com/andreykats/topps-nfc-bridge"
+repository = "https://github.com/andreykats/nfc-browser-bridge"

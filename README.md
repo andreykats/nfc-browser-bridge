@@ -38,7 +38,7 @@ console.
 ### macOS
 
 1. Download `Topps-NFC-Bridge-<version>-macos.dmg` from
-   [Releases](https://github.com/andreykats/topps-nfc-bridge/releases) and drag
+   [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and drag
    **Topps NFC Bridge** to **Applications**. Start it from Applications, not
    from the disk image, or "Start at login" will refuse to turn on.
 2. The build is not signed by Apple, so the first launch is blocked. Open
@@ -49,7 +49,7 @@ console.
 ### Windows
 
 1. Download `Topps-NFC-Bridge-<version>-windows-setup.exe` from
-   [Releases](https://github.com/andreykats/topps-nfc-bridge/releases) and run
+   [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and run
    it. No administrator rights are needed.
 2. The installer is not signed, so SmartScreen warns about it: choose
    **More info → Run anyway**.
@@ -125,7 +125,7 @@ cargo test --workspace                       # Rust (uses FakePcsc, no hardware)
 cargo run -p bridge-app                      # tray app from source
 cargo run -p bridge-core --example serve     # bridge without the tray
 (cd client && npm ci && npm test)            # client library
-(cd web && npm ci && npm run dev)            # test site at http://localhost:5173/topps-nfc-bridge/
+(cd web && npm ci && npm run dev)            # test site at http://localhost:5173/nfc-browser-bridge/
 ```
 
 Hardware tools and the release checklist are in

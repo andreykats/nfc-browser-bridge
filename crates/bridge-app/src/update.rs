@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-pub const REPO: &str = "andreykats/topps-nfc-bridge";
+pub const REPO: &str = "andreykats/nfc-browser-bridge";
 const INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
