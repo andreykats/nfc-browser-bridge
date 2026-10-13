@@ -11,6 +11,8 @@ Tools:
 - `cargo run -p bridge-core --example idle -- "<reader name>"`: measures how
   long a card may sit idle before `SCardConnect` fails (`hold` as a second
   argument keeps a handle open while measuring).
+- `cargo run -p bridge-core --example probe -- "<reader name>"`: prints the
+  reader state, connects once and shows the state changes that follow.
 - `cargo run -p bridge-core --example serve`: the bridge without the tray.
 - `cd client && BRIDGE_HW=1 npx vitest run test/hardware.test.ts`: read, write,
   full-capacity write, erase and restore on a real tag through a running bridge.
@@ -43,6 +45,17 @@ Other observations:
   second connect still works after 12 s and 20 s. The bridge's worker therefore
   holds one idle shared handle per present card from the UID read until the
   card leaves. Batches still use their own connection.
+- **Other processes still trigger the bounce.** The held handle only protects
+  connects from the bridge itself. When another process connects to an idle
+  card (e.g. the `probe` example), the reader still reports
+  `PRESENT|MUTE → EMPTY → PRESENT` within ~0.6 s, even while the bridge holds a
+  handle, and clients see `card_removed` + `card_present`. Other PC/SC apps
+  should not run against the kiosk reader.
+- **Open question:** once (2026-10-13 16:02) a freshly restarted bridge did not
+  see a card that was lying on the ACR1255U-J1 until 4 minutes later. Not
+  reproducible afterwards (startup, clean restart and kill-and-relaunch all
+  found the card within 0.5 s). Earlier the same reader also dropped off USB
+  for 16 s (15:29:35 → 15:29:51). Watch for this in the 30-minute idle check.
 - Timings through the bridge (NTAG215, ACR1255U-J1, debug build): multi-record
   write 20 pages ≈ 160 ms; full-capacity write (492-byte message, 125 pages)
   ≈ 950 ms; full read ≈ 140 ms.
@@ -84,4 +97,6 @@ NTAG213, NTAG215 and NTAG216 cards.
 
 Partial results so far (macOS, ACR1255U-J1, NTAG215 only, built from source):
 read/write/full-capacity/erase verified with the hardware test; tray menu,
-icon states and the "already running" check seen working.
+icon states and the "already running" check seen working; the bundled `.app`
+runs as a menu-bar-only app; the test site (local dev server, headless
+Chromium) read the tag and wrote and verified a two-record message.
