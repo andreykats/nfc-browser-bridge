@@ -254,13 +254,25 @@ export class BridgeClient {
         this.emit("readers", { service: ev.service, readers: ev.readers });
         break;
       }
-      case "card_present":
-        this.emit("card_present", msg as unknown as CardPresentEvent);
+      // The bridge sends a `readers` event right after these; update the list first anyway so
+      // handlers see a consistent `readers`.
+      case "card_present": {
+        const ev = msg as unknown as CardPresentEvent;
+        this.setCard(ev.reader, { uid: ev.uid, atr: ev.atr });
+        this.emit("card_present", ev);
         break;
-      case "card_removed":
-        this.emit("card_removed", msg as unknown as CardRemovedEvent);
+      }
+      case "card_removed": {
+        const ev = msg as unknown as CardRemovedEvent;
+        this.setCard(ev.reader, null);
+        this.emit("card_removed", ev);
         break;
+      }
     }
+  }
+
+  private setCard(reader: string, card: Reader["card"]): void {
+    this.readers = this.readers.map((r) => (r.name === reader ? { ...r, card } : r));
   }
 
   private onResponse(msg: Record<string, unknown>): void {

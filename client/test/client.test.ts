@@ -141,6 +141,22 @@ describe("BridgeClient", () => {
     expect(client.state).toBe("closed");
   });
 
+  it("has the card in `readers` when card_present / card_removed handlers run", async () => {
+    const { fake, client } = setup();
+    const seen: (string | null | undefined)[] = [];
+    client.on("card_present", (e) => seen.push(client.readers.find((r) => r.name === e.reader)?.card?.uid));
+    client.on("card_removed", (e) => seen.push(client.readers.find((r) => r.name === e.reader)?.card?.uid ?? null));
+    client.connect();
+    await tick();
+    const tag = FakeTag.ntag("NTAG213");
+    fake.placeCard(R, tag);
+    await tick();
+    fake.removeCard(R);
+    await tick();
+    expect(seen).toEqual([tag.uidHex, null]);
+    client.close();
+  });
+
   it("shares one bridge between two clients", async () => {
     const { fake, client } = setup();
     const other = new BridgeClient({ WebSocket: fake.WebSocket });
