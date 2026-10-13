@@ -1,7 +1,7 @@
 import "./style.css";
 import { BridgeClient } from "../../client/src/client.js";
 import { TNF_NAMES, describeRecord, matchKey, type NdefRecord } from "../../client/src/ndef.js";
-import { eraseNdef, isType2, readNdef, writeNdef, type CapabilityContainer } from "../../client/src/ntag.js";
+import { eraseNdef, isType2, readNdef, toHex, writeNdef, type CapabilityContainer } from "../../client/src/ntag.js";
 import { entryToRecord, parseApduLines, usage, type Entry } from "./builder.js";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -175,9 +175,13 @@ function renderNdefSummary(box: Element, view: CardView | undefined): void {
     const li = document.createElement("li");
     const type = new TextDecoder().decode(rec.type);
     const kind = rec.tnf === 1 ? { U: "URI", T: "Text" }[type] ?? type : `${TNF_NAMES[rec.tnf]}${type ? ` ${type}` : ""}`;
-    li.innerHTML = `<span class="rtype"></span> <span class="rval"></span>`;
+    li.innerHTML = `<span class="rtype"></span> <span class="rval"></span><div class="rmeta"></div><code class="rhex"></code>`;
     li.querySelector(".rtype")!.textContent = kind;
     li.querySelector(".rval")!.textContent = describeRecord(rec);
+    const id = rec.id.length ? new TextDecoder().decode(rec.id) : "—";
+    li.querySelector(".rmeta")!.textContent =
+      `TNF ${rec.tnf} ${TNF_NAMES[rec.tnf]} · type ${type || "—"} · id ${id} · payload ${rec.payload.length} bytes`;
+    li.querySelector(".rhex")!.textContent = toHex(rec.payload.subarray(0, 64)) + (rec.payload.length > 64 ? "…" : "");
     list.append(li);
   }
   box.append(title, list);
