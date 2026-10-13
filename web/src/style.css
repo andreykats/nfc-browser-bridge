@@ -79,9 +79,6 @@ main {
   cursor: pointer;
 }
 .reader.selected { border-color: var(--accent); background: #fff7f8; }
-.reader .name { font-weight: 600; }
-.reader .kind { font-size: 12px; color: var(--muted); text-transform: uppercase; }
-.reader .cc { color: var(--ok); }
 
 code, pre, textarea { font-family: var(--mono); font-size: 13px; }
 pre { background: #fafaf8; border: 1px solid var(--line); padding: 8px; min-height: 2em; white-space: pre-wrap; word-break: break-all; }
@@ -122,14 +119,20 @@ button:active { transform: translateY(1px); }
 .log li.err { color: var(--accent); }
 
 .reader .info { flex: 1; min-width: 0; }
-.reader .ndef { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
-.reader .ndef-title { font-weight: 600; }
-.reader .ndef ol { margin: 4px 0; padding-left: 22px; }
-.reader .ndef li { word-break: break-all; }
-.reader .ndef .rtype { display: inline-block; min-width: 3.5em; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
-.reader .ndef .rval { font-size: 15px; }
-.reader .matchkey code { font-size: 14px; font-weight: 600; color: var(--accent); }
-.reader .note-text { color: var(--warn); }
-.reader .ndef li { margin-bottom: 6px; }
-.reader .ndef .rmeta { font-size: 12px; color: var(--muted); }
-.reader .ndef .rhex { display: block; font-size: 11px; color: var(--muted); word-break: break-all; }
+.reader-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.reader-head .name { font-weight: 600; }
+.badge { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 6px; border-radius: 3px; background: var(--line); color: var(--muted); }
+.card-kv { font-size: 13px; }
+.card-kv dd { font-family: inherit; word-break: break-all; }
+.card-kv code { font-size: 12px; }
+.card-kv .matchkey { font-size: 13px; font-weight: 600; color: var(--accent); }
+.note-text { color: var(--warn); }
+
+table.records { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 10px; }
+table.records th, table.records td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.records th { color: var(--muted); font-weight: 600; font-size: 12px; white-space: nowrap; }
+table.records .num { text-align: right; white-space: nowrap; }
+table.records td.kind { font-weight: 600; white-space: nowrap; }
+table.records td.value { word-break: break-word; }
+table.records td.mono { font-family: var(--mono); font-size: 12px; }
+table.records td.hex { word-break: break-all; color: var(--muted); max-width: 320px; }

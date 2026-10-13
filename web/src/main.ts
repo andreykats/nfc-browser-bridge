@@ -110,88 +110,101 @@ async function showPermission(): Promise<void> {
 
 // ---- readers ----
 
+/** Create an element with an optional class and text. */
+function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text) e.textContent = text;
+  return e;
+}
+
 function renderReaders(): void {
   const box = $("readers");
   box.replaceChildren();
   if (!client.readers.length) {
-    box.innerHTML = `<p class="empty">${client.state === "open" ? "No readers connected." : "Not connected to the bridge."}</p>`;
+    box.append(el("p", "empty", client.state === "open" ? "No readers connected." : "Not connected to the bridge."));
     return;
   }
   for (const r of client.readers) {
-    const label = document.createElement("label");
-    label.className = "reader" + (r.name === selected ? " selected" : "");
-    const radio = Object.assign(document.createElement("input"), { type: "radio", name: "reader", checked: r.name === selected });
+    const label = el("label", "reader" + (r.name === selected ? " selected" : ""));
+    const radio = Object.assign(el("input"), { type: "radio", name: "reader", checked: r.name === selected });
     radio.onchange = () => {
       selected = r.name;
       renderReaders();
       renderUsage();
     };
-    const view = views.get(r.name);
-    const cc = view?.cc;
-    const info = document.createElement("div");
-    info.className = "info";
-    info.innerHTML = `<div class="name"></div><div class="kind"></div>${
-      r.card
-        ? `<div>UID <code class="uid"></code></div><div>ATR <code class="atr"></code></div><div class="cc"></div><div class="ndef"></div>`
-        : `<div class="empty">no card</div>`
-    }`;
-    info.querySelector(".name")!.textContent = r.name;
-    info.querySelector(".kind")!.textContent = r.kind;
+    const info = el("div", "info");
+    const head = el("div", "reader-head");
+    head.append(el("span", "name", r.name), el("span", "badge", r.kind.toUpperCase()));
+    info.append(head);
     if (r.card) {
-      info.querySelector(".uid")!.textContent = r.card.uid ?? "(none)";
-      info.querySelector(".atr")!.textContent = r.card.atr;
-      info.querySelector(".cc")!.textContent = cc
-        ? `${cc.model}, ${cc.dataBytes} bytes (pages ${cc.firstPage}–${cc.lastPage})${cc.writable ? "" : ", read-only"}`
-        : "";
-      renderNdefSummary(info.querySelector(".ndef")!, view);
+      const view = views.get(r.name);
+      info.append(cardFacts(r.card.uid, r.card.atr, view));
+      if (view?.records?.length) info.append(recordsTable(view.records));
+    } else {
+      info.append(el("p", "empty", "No card"));
     }
     label.append(radio, info);
     box.append(label);
   }
 }
 
-/** The decoded NDEF message, shown on the reader right after a tap. */
-function renderNdefSummary(box: Element, view: CardView | undefined): void {
+/** Labelled facts about the card: UID, ATR, chip, NDEF status, match key. */
+function cardFacts(uid: string | null, atr: string, view: CardView | undefined): HTMLElement {
+  const dl = el("dl", "kv card-kv");
+  const row = (term: string, value: string | HTMLElement) => {
+    const dd = el("dd");
+    dd.append(value);
+    dl.append(el("dt", "", term), dd);
+  };
+  row("UID", el("code", "", uid ?? "(none)"));
+  row("ATR", el("code", "", atr));
+  const cc = view?.cc;
+  if (cc) {
+    row("Card", `${cc.model} · ${cc.dataBytes} bytes · pages ${cc.firstPage}–${cc.lastPage}${cc.writable ? "" : " · read-only"}`);
+  }
   if (!view) {
-    box.textContent = "reading…";
-    return;
+    row("NDEF", "reading…");
+  } else if (view.note) {
+    row("NDEF", el("span", "note-text", view.note));
+  } else if (view.records) {
+    const n = view.records.length;
+    row("NDEF", n ? `${n} record${n === 1 ? "" : "s"}` : "empty");
+    const key = matchKey(view.records);
+    if (key !== null) row("Match key", el("code", "matchkey", key));
   }
-  if (view.note) {
-    box.textContent = view.note;
-    box.classList.add("note-text");
-    return;
+  return dl;
+}
+
+/** One row per NDEF record, with the columns of a raw NDEF dump. */
+function recordsTable(records: NdefRecord[]): HTMLElement {
+  const table = el("table", "records");
+  const headRow = el("tr");
+  for (const h of ["#", "Record", "Value", "TNF", "Type", "ID", "Size", "Payload (hex)"]) {
+    headRow.append(el("th", h === "#" || h === "Size" ? "num" : "", h));
   }
-  if (!view.records) return;
-  if (!view.records.length) {
-    box.textContent = "NDEF: empty";
-    return;
-  }
-  const key = matchKey(view.records);
-  const title = document.createElement("div");
-  title.className = "ndef-title";
-  title.textContent = `NDEF: ${view.records.length} record${view.records.length === 1 ? "" : "s"}`;
-  const list = document.createElement("ol");
-  for (const rec of view.records) {
-    const li = document.createElement("li");
+  table.append(el("thead"));
+  table.tHead!.append(headRow);
+  const body = el("tbody");
+  records.forEach((rec, i) => {
     const type = new TextDecoder().decode(rec.type);
-    const kind = rec.tnf === 1 ? { U: "URI", T: "Text" }[type] ?? type : `${TNF_NAMES[rec.tnf]}${type ? ` ${type}` : ""}`;
-    li.innerHTML = `<span class="rtype"></span> <span class="rval"></span><div class="rmeta"></div><code class="rhex"></code>`;
-    li.querySelector(".rtype")!.textContent = kind;
-    li.querySelector(".rval")!.textContent = describeRecord(rec);
-    const id = rec.id.length ? new TextDecoder().decode(rec.id) : "—";
-    li.querySelector(".rmeta")!.textContent =
-      `TNF ${rec.tnf} ${TNF_NAMES[rec.tnf]} · type ${type || "—"} · id ${id} · payload ${rec.payload.length} bytes`;
-    li.querySelector(".rhex")!.textContent = toHex(rec.payload.subarray(0, 64)) + (rec.payload.length > 64 ? "…" : "");
-    list.append(li);
-  }
-  box.append(title, list);
-  if (key !== null) {
-    const k = document.createElement("div");
-    k.className = "matchkey";
-    k.innerHTML = `Match key: <code></code>`;
-    k.querySelector("code")!.textContent = key;
-    box.append(k);
-  }
+    const kind = rec.tnf === 1 ? ({ U: "URI", T: "Text" } as Record<string, string>)[type] ?? type : TNF_NAMES[rec.tnf];
+    const cells: [string, string][] = [
+      [String(i + 1), "num"],
+      [kind, "kind"],
+      [describeRecord(rec), "value"],
+      [`${rec.tnf} ${TNF_NAMES[rec.tnf]}`, ""],
+      [type || "—", "mono"],
+      [rec.id.length ? new TextDecoder().decode(rec.id) : "—", "mono"],
+      [`${rec.payload.length} B`, "num"],
+      [toHex(rec.payload.subarray(0, 64)) + (rec.payload.length > 64 ? "…" : ""), "mono hex"],
+    ];
+    const tr = el("tr");
+    for (const [text, cls] of cells) tr.append(el("td", cls, text));
+    body.append(tr);
+  });
+  table.append(body);
+  return table;
 }
 
 function currentCard(): { reader: string; atr: string } {
