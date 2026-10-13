@@ -1,0 +1,36 @@
+[package]
+name = "bridge-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Topps NFC Bridge: exposes PC/SC NFC readers to web pages over a local WebSocket"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "topps-nfc-bridge"
+path = "src/main.rs"
+
+[dependencies]
+bridge-core = { path = "../bridge-core" }
+tray-icon = "0.26"
+tao = "0.37"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+dirs = "7"
+ureq = { version = "3", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+rfd = { version = "0.17", default-features = false }
+
+[dev-dependencies]
+png = "0.18"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

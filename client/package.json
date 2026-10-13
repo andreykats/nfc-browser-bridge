@@ -1,0 +1,17 @@
+{
+  "name": "topps-nfc-bridge-client",
+  "version": "0.1.0",
+  "description": "Zero-dependency TypeScript client for the Topps NFC Bridge (protocol v1), with NDEF/NTAG helpers",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.4"
+  }
+}

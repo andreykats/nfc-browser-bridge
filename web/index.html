@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Topps NFC Bridge — test page</title>
+  </head>
+  <body>
+    <header>
+      <h1>Topps NFC Bridge <small>test page</small></h1>
+      <div id="conn" class="pill" data-state="closed">closed</div>
+    </header>
+
+    <main>
+      <section id="help" class="note">
+        <strong>Needs the bridge app running on this computer.</strong>
+        Chrome asks once per site to let it connect to <em>Apps on device</em>; choose <em>Allow</em>.
+        If you blocked it: click the site settings icon left of the address bar → <em>Apps on device</em> → Allow, then reload.
+        <span id="perm"></span>
+      </section>
+
+      <section class="panel">
+        <h2>Connection</h2>
+        <dl class="kv">
+          <dt>URL</dt><dd id="url"></dd>
+          <dt>State</dt><dd id="state">closed</dd>
+          <dt>Bridge version</dt><dd id="version">—</dd>
+          <dt>Smart card service</dt><dd id="service">—</dd>
+        </dl>
+      </section>
+
+      <section class="panel">
+        <h2>Readers</h2>
+        <p class="hint">Select the reader to use below.</p>
+        <div id="readers" class="readers"><p class="empty">No readers.</p></div>
+      </section>
+
+      <section class="panel">
+        <h2>Read NDEF</h2>
+        <div class="row">
+          <button id="read">Read</button>
+          <label><input type="checkbox" id="autoread" checked /> Read on tap</label>
+        </div>
+        <p>Match key: <code id="matchkey">—</code></p>
+        <table>
+          <thead><tr><th>#</th><th>TNF</th><th>Type</th><th>ID</th><th>Decoded</th><th>Payload (hex)</th></tr></thead>
+          <tbody id="records"><tr><td colspan="6" class="empty">Nothing read yet.</td></tr></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Write</h2>
+        <div id="entries"></div>
+        <div class="row">
+          <button id="add-uri" class="secondary">+ URI</button>
+          <button id="add-text" class="secondary">+ Text</button>
+          <button id="add-mime" class="secondary">+ MIME</button>
+        </div>
+        <div class="meter"><div id="meter-bar"></div></div>
+        <p id="usage" class="hint">—</p>
+        <div class="row">
+          <button id="write">Write</button>
+          <button id="erase" class="danger">Erase NDEF</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Raw APDU console</h2>
+        <p class="hint">One APDU per line, hex. Writes to pages 0–3 are blocked by the bridge.</p>
+        <textarea id="apdus" rows="4" spellcheck="false">FF CA 00 00 00   # UID
+FF B0 00 03 04   # CC (page 3)</textarea>
+        <div class="row">
+          <button id="send">Send</button>
+          <button id="reset" class="secondary">Reset card</button>
+          <label><input type="checkbox" id="stop" checked /> Stop on error</label>
+        </div>
+        <pre id="apdu-out"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Event log</h2>
+        <div class="row"><button id="clear-log" class="secondary">Clear</button></div>
+        <ol id="log" class="log"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

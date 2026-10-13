@@ -1,0 +1,223 @@
+//! The monitor thread: watches readers and cards with blocking `SCardGetStatusChange`, survives the
+//! smart-card service stopping, and feeds the hub.
+
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+use crate::backend::{PNP_READER, PcscBackend, PcscContext, PcscError, ReaderWatch, state};
+use crate::hub::Hub;
+use crate::protocol::{ReaderKind, ServiceStatus, encode_hex};
+use crate::worker::{Job, WorkerHandle};
+
+const STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+const BACKOFF: [Duration; 3] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(5),
+];
+
+/// Stop flag with an interruptible sleep.
+#[derive(Default)]
+pub struct Stopper {
+    stopped: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Stopper {
+    pub fn stop(&self) {
+        *self.stopped.lock().unwrap() = true;
+        self.cv.notify_all();
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        *self.stopped.lock().unwrap()
+    }
+
+    /// Sleep up to `d`; returns true if stopped.
+    pub fn sleep(&self, d: Duration) -> bool {
+        let guard = self.stopped.lock().unwrap();
+        *self.cv.wait_timeout_while(guard, d, |s| !*s).unwrap().0
+    }
+}
+
+pub struct MonitorHandle<C> {
+    stopper: Arc<Stopper>,
+    ctx: Arc<Mutex<Option<C>>>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl<C: PcscContext> MonitorHandle<C> {
+    pub fn stop(mut self) {
+        self.stopper.stop();
+        if let Some(ctx) = self.ctx.lock().unwrap().as_ref() {
+            let _ = ctx.cancel();
+        }
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+pub fn spawn<B: PcscBackend>(
+    backend: Arc<B>,
+    hub: Arc<Hub>,
+    worker: WorkerHandle,
+) -> MonitorHandle<B::Context> {
+    let stopper = Arc::new(Stopper::default());
+    let ctx = Arc::new(Mutex::new(None));
+    let m = Monitor {
+        backend,
+        hub,
+        worker,
+        stopper: stopper.clone(),
+        ctx_slot: ctx.clone(),
+    };
+    let thread = std::thread::Builder::new()
+        .name("pcsc-monitor".into())
+        .spawn(move || m.run())
+        .expect("spawn monitor thread");
+    MonitorHandle {
+        stopper,
+        ctx,
+        thread: Some(thread),
+    }
+}
+
+struct Monitor<B: PcscBackend> {
+    backend: Arc<B>,
+    hub: Arc<Hub>,
+    worker: WorkerHandle,
+    stopper: Arc<Stopper>,
+    /// The live context, so `stop` can cancel a blocking call.
+    ctx_slot: Arc<Mutex<Option<B::Context>>>,
+}
+
+impl<B: PcscBackend> Monitor<B> {
+    fn run(self) {
+        let mut attempt = 0;
+        while !self.stopper.is_stopped() {
+            match self.backend.establish() {
+                Ok(ctx) => {
+                    *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
+                    // Re-check: stop() may have run before the context was visible to it.
+                    if self.stopper.is_stopped() {
+                        break;
+                    }
+                    let worked = self.watch(&ctx);
+                    *self.ctx_slot.lock().unwrap() = None;
+                    if worked {
+                        attempt = 0;
+                    }
+                }
+                Err(e) => tracing::debug!(pcsc = %e, "establish context failed"),
+            }
+            self.hub.set_service(ServiceStatus::Unavailable);
+            let delay = BACKOFF[attempt.min(BACKOFF.len() - 1)];
+            attempt += 1;
+            if self.stopper.sleep(delay) {
+                break;
+            }
+        }
+        tracing::debug!("monitor stopped");
+    }
+
+    /// Watch until the context dies or we are stopped. Returns true if the context ever worked.
+    fn watch(&self, ctx: &B::Context) -> bool {
+        let mut watches = vec![ReaderWatch::new(PNP_READER)];
+        let mut worked = false;
+        loop {
+            if self.stopper.is_stopped() {
+                return worked;
+            }
+            match ctx.list_readers() {
+                Ok(names) => {
+                    if !worked {
+                        worked = true;
+                        self.hub.set_service(ServiceStatus::Ready);
+                    }
+                    watches.retain(|w| w.is_pnp() || names.contains(&w.name));
+                    for n in &names {
+                        if !watches.iter().any(|w| &w.name == n) {
+                            watches.push(ReaderWatch::new(n.clone()));
+                        }
+                    }
+                    for reader in self.hub.set_readers(&names) {
+                        self.worker.submit_blocking(Job::Release { reader });
+                    }
+                }
+                Err(e) if e.is_service_lost() => {
+                    tracing::info!(pcsc = %e, "smart card service lost");
+                    return worked;
+                }
+                Err(e) => tracing::warn!(pcsc = %e, "list readers failed"),
+            }
+
+            if watches.is_empty() {
+                if self.stopper.sleep(STATUS_TIMEOUT) {
+                    return worked;
+                }
+                continue;
+            }
+
+            match ctx.get_status_change(STATUS_TIMEOUT, &mut watches) {
+                Ok(()) => self.process(&mut watches),
+                Err(PcscError::TIMEOUT | PcscError::CANCELLED) => {}
+                // A reader vanished between listing and waiting; the next listing fixes it.
+                Err(PcscError::UNKNOWN_READER | PcscError::READER_UNAVAILABLE) => {}
+                Err(e) if e.is_service_lost() => {
+                    tracing::info!(pcsc = %e, "smart card service lost");
+                    return worked;
+                }
+                Err(e) => {
+                    tracing::warn!(pcsc = %e, "get status change failed");
+                    if self.stopper.sleep(STATUS_TIMEOUT) {
+                        return worked;
+                    }
+                }
+            }
+        }
+    }
+
+    fn process(&self, watches: &mut Vec<ReaderWatch>) {
+        let mut drop_pnp = false;
+        for w in watches.iter_mut() {
+            if !w.has(state::CHANGED) {
+                continue;
+            }
+            w.sync();
+            if w.is_pnp() {
+                // macOS reports the PnP pseudo-reader as UNKNOWN: fall back to the 1 s re-list.
+                if w.has(state::UNKNOWN) {
+                    tracing::info!("PnP notifications unsupported; polling the reader list");
+                    drop_pnp = true;
+                }
+                continue;
+            }
+            let present =
+                w.has(state::PRESENT) && !w.has(state::MUTE | state::UNKNOWN | state::UNAVAILABLE);
+            if !present {
+                if self.hub.card_gone(&w.name) {
+                    self.worker.submit_blocking(Job::Release {
+                        reader: w.name.clone(),
+                    });
+                }
+                continue;
+            }
+            if let Some((generation, kind)) = self.hub.card_seen(&w.name, encode_hex(&w.atr)) {
+                if kind == ReaderKind::Sam {
+                    // SAMs are contact cards: no UID to read.
+                    self.hub.card_identified(&w.name, generation, None);
+                } else {
+                    self.worker.submit_blocking(Job::ReadUid {
+                        reader: w.name.clone(),
+                        generation,
+                    });
+                }
+            }
+        }
+        if drop_pnp {
+            watches.retain(|w| !w.is_pnp());
+        }
+    }
+}
