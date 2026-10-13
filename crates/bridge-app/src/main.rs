@@ -24,6 +24,8 @@ use menu::{AppState, MenuModel};
 use update::UpdateInfo;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// macOS menu-bar icons are template images, tinted by the system for light/dark menu bars.
+const TEMPLATE_ICONS: bool = cfg!(target_os = "macos");
 const RETRY_BIND: Duration = Duration::from_secs(5);
 
 #[derive(Debug)]
@@ -112,11 +114,10 @@ impl App {
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip(&model.tooltip);
-        let builder = if cfg!(target_os = "macos") {
-            builder.with_icon_templated(icon(model.icon))
-        } else {
-            builder.with_icon(icon(model.icon))
-        };
+        #[cfg(target_os = "macos")]
+        let builder = builder.with_icon_templated(icon(model.icon));
+        #[cfg(not(target_os = "macos"))]
+        let builder = builder.with_icon(icon(model.icon));
         match builder.build() {
             Ok(tray) => {
                 self.tray = Some(tray);
@@ -165,7 +166,7 @@ impl App {
 }
 
 fn icon(state: IconState) -> Icon {
-    let (size, template) = if cfg!(target_os = "macos") {
+    let (size, template) = if TEMPLATE_ICONS {
         (44, true)
     } else {
         (32, false)
@@ -174,11 +175,10 @@ fn icon(state: IconState) -> Icon {
 }
 
 fn set_icon(tray: &TrayIcon, state: IconState) -> tray_icon::Result<()> {
-    if cfg!(target_os = "macos") {
-        tray.set_icon_templated(Some(icon(state)))
-    } else {
-        tray.set_icon(Some(icon(state)))
-    }
+    #[cfg(target_os = "macos")]
+    return tray.set_icon_templated(Some(icon(state)));
+    #[cfg(not(target_os = "macos"))]
+    return tray.set_icon(Some(icon(state)));
 }
 
 fn dialog(title: &str, message: &str) {

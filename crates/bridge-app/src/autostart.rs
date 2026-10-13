@@ -1,6 +1,8 @@
 //! "Start at login": a LaunchAgent on macOS, the HKCU Run key on Windows.
 
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "macos")]
+use std::path::Path;
+use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 const LABEL: &str = "dev.drey.topps-nfc-bridge";
@@ -10,6 +12,7 @@ const RUN_VALUE: &str = "ToppsNFCBridge";
 #[derive(Debug)]
 pub enum AutostartError {
     /// macOS: running from a disk image or a translocated copy; the path will not survive.
+    #[cfg(target_os = "macos")]
     NotInstalled,
     Io(std::io::Error),
 }
@@ -17,6 +20,7 @@ pub enum AutostartError {
 impl std::fmt::Display for AutostartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(target_os = "macos")]
             Self::NotInstalled => {
                 write!(
                     f,
@@ -40,6 +44,7 @@ fn current_exe() -> Result<PathBuf, AutostartError> {
 
 /// macOS Gatekeeper runs quarantined apps from a randomized read-only path, and a mounted DMG
 /// disappears after ejecting. Neither path can be used for login items.
+#[cfg(target_os = "macos")]
 pub fn is_transient_location(exe: &Path) -> bool {
     let s = exe.to_string_lossy();
     s.contains("/AppTranslocation/") || s.starts_with("/Volumes/")
@@ -174,7 +179,7 @@ pub fn refresh() {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 mod tests {
     use super::*;
 
@@ -191,7 +196,6 @@ mod tests {
         )));
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn plist_escapes_and_has_keepalive() {
         let p = launch_agent_plist(Path::new("/Applications/A&B.app/Contents/MacOS/x"));

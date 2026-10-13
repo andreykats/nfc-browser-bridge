@@ -35,18 +35,31 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
     matches!((parse(latest), parse(current)), (Some(l), Some(c)) if l > c)
 }
 
+/// HTTPS through the OS TLS stack (SChannel / Security.framework) and the OS trust store, so
+/// corporate TLS-inspecting proxies work and no C crypto library is bundled.
+fn agent() -> ureq::Agent {
+    use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
+    let tls = TlsConfig::builder()
+        .provider(TlsProvider::NativeTls)
+        .root_certs(RootCerts::PlatformVerifier)
+        .build();
+    ureq::Agent::config_builder()
+        .tls_config(tls)
+        .timeout_global(Some(Duration::from_secs(20)))
+        .build()
+        .new_agent()
+}
+
 fn check(current: &str) -> Result<Option<UpdateInfo>, ureq::Error> {
-    let release: Release = ureq::get(format!(
-        "https://api.github.com/repos/{REPO}/releases/latest"
-    ))
-    .header("User-Agent", format!("topps-nfc-bridge/{current}"))
-    .header("Accept", "application/vnd.github+json")
-    .config()
-    .timeout_global(Some(Duration::from_secs(20)))
-    .build()
-    .call()?
-    .body_mut()
-    .read_json()?;
+    let release: Release = agent()
+        .get(format!(
+            "https://api.github.com/repos/{REPO}/releases/latest"
+        ))
+        .header("User-Agent", format!("topps-nfc-bridge/{current}"))
+        .header("Accept", "application/vnd.github+json")
+        .call()?
+        .body_mut()
+        .read_json()?;
     Ok(is_newer(&release.tag_name, current).then(|| UpdateInfo {
         version: release.tag_name.trim_start_matches('v').to_string(),
         url: release.html_url,
@@ -65,6 +78,8 @@ pub fn spawn(current: &'static str, found: impl Fn(UpdateInfo) + Send + 'static)
                         found(info);
                     }
                     Ok(None) => tracing::debug!("up to date"),
+                    // No release published yet.
+                    Err(ureq::Error::StatusCode(404)) => tracing::debug!("no releases"),
                     Err(e) => tracing::info!(error = %e, "update check failed"),
                 }
                 std::thread::sleep(INTERVAL);
@@ -85,5 +100,20 @@ mod tests {
         assert!(!is_newer("v0.0.9", "0.1.0"));
         assert!(!is_newer("garbage", "0.1.0"));
         assert!(!is_newer("v0.1.0-rc1", "0.1.0"));
+    }
+
+    /// Network: `cargo test -p bridge-app -- --ignored`
+    #[test]
+    #[ignore]
+    fn reaches_github_over_os_tls() {
+        let r: Release = agent()
+            .get("https://api.github.com/repos/tauri-apps/tray-icon/releases/latest")
+            .header("User-Agent", "topps-nfc-bridge-test")
+            .call()
+            .unwrap()
+            .body_mut()
+            .read_json()
+            .unwrap();
+        assert!(r.tag_name.contains('.'));
     }
 }
