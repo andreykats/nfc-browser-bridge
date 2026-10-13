@@ -124,3 +124,13 @@ td:last-child { font-family: var(--mono); word-break: break-all; }
 .log li { padding: 2px 0; border-bottom: 1px dotted var(--line); }
 .log li.ok { color: var(--ok); }
 .log li.err { color: var(--accent); }
+
+.reader .info { flex: 1; min-width: 0; }
+.reader .ndef { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+.reader .ndef-title { font-weight: 600; }
+.reader .ndef ol { margin: 4px 0; padding-left: 22px; }
+.reader .ndef li { word-break: break-all; }
+.reader .ndef .rtype { display: inline-block; min-width: 3.5em; font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+.reader .ndef .rval { font-size: 15px; }
+.reader .matchkey code { font-size: 14px; font-weight: 600; color: var(--accent); }
+.reader .note-text { color: var(--warn); }

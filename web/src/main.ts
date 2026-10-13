@@ -2,15 +2,20 @@ import "./style.css";
 import { BridgeClient } from "../../client/src/client.js";
 import { TNF_NAMES, describeRecord, matchKey, type NdefRecord } from "../../client/src/ndef.js";
 import { eraseNdef, isType2, readCC, readNdef, toHex, writeNdef, type CapabilityContainer } from "../../client/src/ntag.js";
-import type { Reader } from "../../client/src/protocol.js";
 import { entryToRecord, parseApduLines, usage, type Entry } from "./builder.js";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const client = new BridgeClient();
 let selected: string | null = null;
-/** CC per reader for the card currently on it (or an error message). */
-const ccs = new Map<string, CapabilityContainer | string>();
+/** What we know about the card currently on each reader. */
+interface CardView {
+  cc?: CapabilityContainer;
+  records?: NdefRecord[];
+  /** Why the card could not be read (not Type 2, read error, …). */
+  note?: string;
+}
+const views = new Map<string, CardView>();
 const entries: Entry[] = [{ kind: "uri", uri: "https://topps.drey.dev/" }];
 
 // ---- log ----
@@ -44,41 +49,58 @@ client.on("state", (s) => {
 client.on("hello", (h) => {
   $("version").textContent = h.version;
   log(`hello from bridge ${h.version}`, "ok");
-  for (const r of h.readers) if (r.card) void detect(r);
+  for (const r of h.readers) if (r.card) void inspect(r.name, r.card.atr);
 });
 
 client.on("readers", ({ service, readers }) => {
   $("service").textContent = service;
-  for (const r of readers) if (!r.card) ccs.delete(r.name);
+  for (const r of readers) if (!r.card) views.delete(r.name);
   if (!selected || !readers.some((r) => r.name === selected)) {
     selected = (readers.find((r) => r.kind === "picc" && r.card) ?? readers.find((r) => r.kind === "picc") ?? readers[0])?.name ?? null;
   }
   renderReaders();
 });
 
-client.on("card_present", async (e) => {
+client.on("card_present", (e) => {
   log(`card_present ${e.reader}: uid ${e.uid ?? "?"}`, "ok");
-  const reader = client.readers.find((r) => r.name === e.reader);
-  if (reader) await detect(reader);
-  if (($("autoread") as HTMLInputElement).checked && e.reader === selected) void doRead();
+  void inspect(e.reader, e.atr);
 });
 
 client.on("card_removed", (e) => log(`card_removed ${e.reader}`));
 client.on("error", (e) => log(errText(e), "err"));
 
-async function detect(r: Reader): Promise<void> {
-  if (!r.card) return;
-  if (!isType2(r.card.atr)) {
-    ccs.set(r.name, "not an NFC Forum Type 2 card");
+/**
+ * Read the card on `reader`: the full NDEF message when "Read on tap" is on (or `full`), else only
+ * the capability container. Shows the result on the reader and, for the selected reader, in the
+ * Read NDEF table.
+ */
+async function inspect(reader: string, atr: string, full = ($("autoread") as HTMLInputElement).checked): Promise<void> {
+  const view: CardView = {};
+  views.set(reader, view);
+  if (!isType2(atr)) {
+    view.note = "not an NFC Forum Type 2 card";
   } else {
     try {
-      ccs.set(r.name, await readCC(client, r.name, r.card.atr));
+      if (full) {
+        const t0 = performance.now();
+        const n = await readNdef(client, reader, atr);
+        view.cc = n.cc;
+        view.records = n.records;
+        log(`read ${n.records.length} record(s), ${n.message.length} bytes in ${Math.round(performance.now() - t0)} ms`, "ok");
+        if (reader === selected) renderRecords(n.records);
+      } else {
+        view.cc = await readCC(client, reader, atr);
+      }
     } catch (e) {
-      ccs.set(r.name, errText(e));
+      view.note = errText(e);
+      log(`read failed: ${errText(e)}`, "err");
     }
   }
-  renderReaders();
-  renderUsage();
+  // A newer tap may have replaced this view meanwhile.
+  if (views.get(reader) === view) {
+    renderReaders();
+    renderUsage();
+  }
 }
 
 async function showPermission(): Promise<void> {
@@ -113,22 +135,67 @@ function renderReaders(): void {
       renderReaders();
       renderUsage();
     };
-    const cc = ccs.get(r.name);
+    const view = views.get(r.name);
+    const cc = view?.cc;
     const info = document.createElement("div");
-    const ccText =
-      cc === undefined ? "" : typeof cc === "string" ? cc : `${cc.model}, ${cc.dataBytes} bytes (pages ${cc.firstPage}–${cc.lastPage})${cc.writable ? "" : ", read-only"}`;
+    info.className = "info";
     info.innerHTML = `<div class="name"></div><div class="kind"></div>${
-      r.card ? `<div>UID <code class="uid"></code></div><div>ATR <code class="atr"></code></div><div class="cc"></div>` : `<div class="empty">no card</div>`
+      r.card
+        ? `<div>UID <code class="uid"></code></div><div>ATR <code class="atr"></code></div><div class="cc"></div><div class="ndef"></div>`
+        : `<div class="empty">no card</div>`
     }`;
     info.querySelector(".name")!.textContent = r.name;
     info.querySelector(".kind")!.textContent = r.kind;
     if (r.card) {
       info.querySelector(".uid")!.textContent = r.card.uid ?? "(none)";
       info.querySelector(".atr")!.textContent = r.card.atr;
-      info.querySelector(".cc")!.textContent = ccText;
+      info.querySelector(".cc")!.textContent = cc
+        ? `${cc.model}, ${cc.dataBytes} bytes (pages ${cc.firstPage}–${cc.lastPage})${cc.writable ? "" : ", read-only"}`
+        : "";
+      renderNdefSummary(info.querySelector(".ndef")!, view);
     }
     label.append(radio, info);
     box.append(label);
+  }
+}
+
+/** The decoded NDEF message, shown on the reader right after a tap. */
+function renderNdefSummary(box: Element, view: CardView | undefined): void {
+  if (!view) {
+    box.textContent = "reading…";
+    return;
+  }
+  if (view.note) {
+    box.textContent = view.note;
+    box.classList.add("note-text");
+    return;
+  }
+  if (!view.records) return; // CC only ("Read on tap" off)
+  if (!view.records.length) {
+    box.textContent = "NDEF: empty";
+    return;
+  }
+  const key = matchKey(view.records);
+  const title = document.createElement("div");
+  title.className = "ndef-title";
+  title.textContent = `NDEF: ${view.records.length} record${view.records.length === 1 ? "" : "s"}`;
+  const list = document.createElement("ol");
+  for (const rec of view.records) {
+    const li = document.createElement("li");
+    const type = new TextDecoder().decode(rec.type);
+    const kind = rec.tnf === 1 ? { U: "URI", T: "Text" }[type] ?? type : `${TNF_NAMES[rec.tnf]}${type ? ` ${type}` : ""}`;
+    li.innerHTML = `<span class="rtype"></span> <span class="rval"></span>`;
+    li.querySelector(".rtype")!.textContent = kind;
+    li.querySelector(".rval")!.textContent = describeRecord(rec);
+    list.append(li);
+  }
+  box.append(title, list);
+  if (key !== null) {
+    const k = document.createElement("div");
+    k.className = "matchkey";
+    k.innerHTML = `Match key: <code></code>`;
+    k.querySelector("code")!.textContent = key;
+    box.append(k);
   }
 }
 
@@ -170,10 +237,7 @@ function renderRecords(records: NdefRecord[]): void {
 async function doRead(): Promise<void> {
   try {
     const { reader, atr } = currentCard();
-    const t0 = performance.now();
-    const n = await readNdef(client, reader, atr);
-    renderRecords(n.records);
-    log(`read ${n.records.length} record(s), ${n.message.length} bytes in ${Math.round(performance.now() - t0)} ms`, "ok");
+    await inspect(reader, atr, true);
   } catch (e) {
     log(`read failed: ${errText(e)}`, "err");
   }
@@ -230,11 +294,11 @@ function buildRecords(): NdefRecord[] {
 }
 
 function renderUsage(): void {
-  const cc = selected ? ccs.get(selected) : undefined;
+  const cc = selected ? views.get(selected)?.cc : undefined;
   const bar = $("meter-bar");
   try {
     const records = buildRecords();
-    if (!cc || typeof cc === "string") {
+    if (!cc) {
       const size = usage(records, Infinity).used;
       $("usage").textContent = `${size} bytes (place a Type 2 card to see capacity)`;
       bar.style.width = "0";
@@ -277,7 +341,7 @@ $("erase").onclick = async () => {
     const { reader, atr } = currentCard();
     await eraseNdef(client, reader, atr);
     log("erased NDEF (empty TLV)", "ok");
-    renderRecords([]);
+    void doRead();
   } catch (e) {
     log(`erase failed: ${errText(e)}`, "err");
   }
