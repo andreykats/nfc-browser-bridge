@@ -1,0 +1,93 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: v
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$tag" != "$crate" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match workspace version $crate" >&2
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+  macos:
+    needs: version
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          rustup toolchain install stable --profile minimal -t aarch64-apple-darwin,x86_64-apple-darwin
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo build --release -p bridge-app --target aarch64-apple-darwin
+          cargo build --release -p bridge-app --target x86_64-apple-darwin
+          mkdir -p target/universal
+          lipo -create -output target/universal/topps-nfc-bridge \
+            target/aarch64-apple-darwin/release/topps-nfc-bridge \
+            target/x86_64-apple-darwin/release/topps-nfc-bridge
+          lipo -archs target/universal/topps-nfc-bridge
+      - run: packaging/macos/bundle.sh target/universal/topps-nfc-bridge "${{ needs.version.outputs.version }}" target/dist --dmg
+      - uses: actions/upload-artifact@v7
+        with:
+          name: macos
+          path: target/dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup toolchain install stable --profile minimal -t x86_64-pc-windows-msvc && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      # crt-static comes from .cargo/config.toml.
+      - run: cargo build --release -p bridge-app --target x86_64-pc-windows-msvc
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup -y --no-progress
+          }
+          & $iscc "/DAppVersion=${{ needs.version.outputs.version }}" `
+            "/DExePath=$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\topps-nfc-bridge.exe" `
+            packaging\windows\installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: packaging/windows/*-windows-setup.exe
+          if-no-files-found: error
+
+  release:
+    needs: [version, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Topps NFC Bridge ${{ needs.version.outputs.version }}" \
+            --generate-notes
