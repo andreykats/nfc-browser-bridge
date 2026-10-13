@@ -1,7 +1,7 @@
 import "./style.css";
 import { BridgeClient } from "../../client/src/client.js";
 import { TNF_NAMES, describeRecord, matchKey, type NdefRecord } from "../../client/src/ndef.js";
-import { eraseNdef, isType2, readCC, readNdef, toHex, writeNdef, type CapabilityContainer } from "../../client/src/ntag.js";
+import { eraseNdef, isType2, readNdef, writeNdef, type CapabilityContainer } from "../../client/src/ntag.js";
 import { entryToRecord, parseApduLines, usage, type Entry } from "./builder.js";
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -69,28 +69,19 @@ client.on("card_present", (e) => {
 client.on("card_removed", (e) => log(`card_removed ${e.reader}`));
 client.on("error", (e) => log(errText(e), "err"));
 
-/**
- * Read the card on `reader`: the full NDEF message when "Read on tap" is on (or `full`), else only
- * the capability container. Shows the result on the reader and, for the selected reader, in the
- * Read NDEF table.
- */
-async function inspect(reader: string, atr: string, full = ($("autoread") as HTMLInputElement).checked): Promise<void> {
+/** Read the NDEF message of the card on `reader` and show it on the reader. */
+async function inspect(reader: string, atr: string): Promise<void> {
   const view: CardView = {};
   views.set(reader, view);
   if (!isType2(atr)) {
     view.note = "not an NFC Forum Type 2 card";
   } else {
     try {
-      if (full) {
-        const t0 = performance.now();
-        const n = await readNdef(client, reader, atr);
-        view.cc = n.cc;
-        view.records = n.records;
-        log(`read ${n.records.length} record(s), ${n.message.length} bytes in ${Math.round(performance.now() - t0)} ms`, "ok");
-        if (reader === selected) renderRecords(n.records);
-      } else {
-        view.cc = await readCC(client, reader, atr);
-      }
+      const t0 = performance.now();
+      const n = await readNdef(client, reader, atr);
+      view.cc = n.cc;
+      view.records = n.records;
+      log(`read ${n.records.length} record(s), ${n.message.length} bytes in ${Math.round(performance.now() - t0)} ms`, "ok");
     } catch (e) {
       view.note = errText(e);
       log(`read failed: ${errText(e)}`, "err");
@@ -170,7 +161,7 @@ function renderNdefSummary(box: Element, view: CardView | undefined): void {
     box.classList.add("note-text");
     return;
   }
-  if (!view.records) return; // CC only ("Read on tap" off)
+  if (!view.records) return;
   if (!view.records.length) {
     box.textContent = "NDEF: empty";
     return;
@@ -206,44 +197,15 @@ function currentCard(): { reader: string; atr: string } {
   return { reader: r.name, atr: r.card.atr };
 }
 
-// ---- read ----
-
-function renderRecords(records: NdefRecord[]): void {
-  const body = $("records");
-  body.replaceChildren();
-  if (!records.length) {
-    body.innerHTML = `<tr><td colspan="6" class="empty">No NDEF records (empty tag).</td></tr>`;
-  }
-  records.forEach((r, i) => {
-    const tr = document.createElement("tr");
-    const cells = [
-      String(i + 1),
-      `${r.tnf} ${TNF_NAMES[r.tnf]}`,
-      new TextDecoder().decode(r.type),
-      r.id.length ? new TextDecoder().decode(r.id) : "",
-      describeRecord(r),
-      toHex(r.payload.subarray(0, 64)) + (r.payload.length > 64 ? "…" : ""),
-    ];
-    for (const c of cells) {
-      const td = document.createElement("td");
-      td.textContent = c;
-      tr.append(td);
-    }
-    body.append(tr);
-  });
-  $("matchkey").textContent = matchKey(records) ?? "(none)";
-}
-
+/** Re-read the selected reader's card (after a write or erase). */
 async function doRead(): Promise<void> {
   try {
     const { reader, atr } = currentCard();
-    await inspect(reader, atr, true);
+    await inspect(reader, atr);
   } catch (e) {
     log(`read failed: ${errText(e)}`, "err");
   }
 }
-
-$("read").onclick = () => void doRead();
 
 // ---- write ----
 

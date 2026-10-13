@@ -104,10 +104,6 @@ button.danger { background: #fff; color: var(--accent); border-color: var(--acce
 button.icon { padding: 4px 9px; }
 button:active { transform: translateY(1px); }
 
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-td:last-child { font-family: var(--mono); word-break: break-all; }
 
 .entry { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
 .entry .tag { font-size: 11px; font-weight: 700; width: 44px; color: var(--muted); }
