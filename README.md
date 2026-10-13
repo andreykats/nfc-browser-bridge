@@ -1,8 +1,8 @@
-# Topps NFC Bridge
+# NFC Browser Bridge
 
 Desktop Chrome cannot talk to USB smart-card (CCID) NFC readers directly: WebUSB
 blocks the smart-card class and the Web Smart Card API only ships on ChromeOS.
-Topps NFC Bridge is a small menu-bar (macOS) / system-tray (Windows) app that
+NFC Browser Bridge is a small menu-bar (macOS) / system-tray (Windows) app that
 exposes the operating system's smart-card service (PC/SC) to web pages over a
 local WebSocket.
 
@@ -37,18 +37,18 @@ console.
 
 ### macOS
 
-1. Download `Topps-NFC-Bridge-<version>-macos.dmg` from
+1. Download `NFC-Browser-Bridge-<version>-macos.dmg` from
    [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and drag
-   **Topps NFC Bridge** to **Applications**. Start it from Applications, not
+   **NFC Browser Bridge** to **Applications**. Start it from Applications, not
    from the disk image, or "Start at login" will refuse to turn on.
 2. The build is not signed by Apple, so the first launch is blocked. Open
    **System Settings → Privacy & Security**, scroll to the message about
-   Topps NFC Bridge and click **Open Anyway**. This repeats after every update.
+   NFC Browser Bridge and click **Open Anyway**. This repeats after every update.
 3. A card icon appears in the menu bar. Turn on **Start at login** in its menu.
 
 ### Windows
 
-1. Download `Topps-NFC-Bridge-<version>-windows-setup.exe` from
+1. Download `NFC-Browser-Bridge-<version>-windows-setup.exe` from
    [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and run
    it. No administrator rights are needed.
 2. The installer is not signed, so SmartScreen warns about it: choose
@@ -104,8 +104,8 @@ the websites currently connected.
 ## Troubleshooting
 
 - **Logs:** tray menu → **Open log folder**.
-  macOS: `~/Library/Logs/ToppsNFCBridge/`;
-  Windows: `%LOCALAPPDATA%\ToppsNFCBridge\logs\`.
+  macOS: `~/Library/Logs/NFCBrowserBridge/`;
+  Windows: `%LOCALAPPDATA%\NFCBrowserBridge\logs\`.
   Daily files, last 7 kept. Start the app with `RUST_LOG=debug` to log APDUs.
 - **"Port 38241 in use by another app":** another program listens on the
   bridge's port. The bridge retries every 5 seconds.

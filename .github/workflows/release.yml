@@ -39,11 +39,11 @@ jobs:
           cargo build --release -p bridge-app --target aarch64-apple-darwin
           cargo build --release -p bridge-app --target x86_64-apple-darwin
           mkdir -p target/universal
-          lipo -create -output target/universal/topps-nfc-bridge \
-            target/aarch64-apple-darwin/release/topps-nfc-bridge \
-            target/x86_64-apple-darwin/release/topps-nfc-bridge
-          lipo -archs target/universal/topps-nfc-bridge
-      - run: packaging/macos/bundle.sh target/universal/topps-nfc-bridge "${{ needs.version.outputs.version }}" target/dist --dmg
+          lipo -create -output target/universal/nfc-browser-bridge \
+            target/aarch64-apple-darwin/release/nfc-browser-bridge \
+            target/x86_64-apple-darwin/release/nfc-browser-bridge
+          lipo -archs target/universal/nfc-browser-bridge
+      - run: packaging/macos/bundle.sh target/universal/nfc-browser-bridge "${{ needs.version.outputs.version }}" target/dist --dmg
       - uses: actions/upload-artifact@v7
         with:
           name: macos
@@ -67,7 +67,7 @@ jobs:
             choco install innosetup -y --no-progress
           }
           & $iscc "/DAppVersion=${{ needs.version.outputs.version }}" `
-            "/DExePath=$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\topps-nfc-bridge.exe" `
+            "/DExePath=$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release\nfc-browser-bridge.exe" `
             packaging\windows\installer.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v7
@@ -89,5 +89,5 @@ jobs:
         run: |
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Topps NFC Bridge ${{ needs.version.outputs.version }}" \
+            --title "NFC Browser Bridge ${{ needs.version.outputs.version }}" \
             --generate-notes

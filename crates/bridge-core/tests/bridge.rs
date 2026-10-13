@@ -124,7 +124,7 @@ async fn hello_lists_existing_cards_without_a_tap() {
     let hello = recv(&mut ws).await;
     assert_eq!(hello["event"], "hello");
     assert_eq!(hello["protocol"], 1);
-    assert_eq!(hello["app"], "topps-nfc-bridge");
+    assert_eq!(hello["app"], "nfc-browser-bridge");
     assert_eq!(hello["version"], "9.9.9");
     assert_eq!(hello["service"], "ready");
     assert_eq!(

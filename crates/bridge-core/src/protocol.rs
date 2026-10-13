@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::backend::PcscError;
 
 pub const PROTOCOL_VERSION: u32 = 1;
-pub const APP_NAME: &str = "topps-nfc-bridge";
+pub const APP_NAME: &str = "nfc-browser-bridge";
 pub const DEFAULT_PORT: u16 = 38241;
 pub const WS_PATH: &str = "/v1";
 

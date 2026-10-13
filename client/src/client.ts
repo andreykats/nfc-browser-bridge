@@ -1,4 +1,4 @@
-// BridgeClient: a reconnecting WebSocket client for the Topps NFC Bridge (protocol v1).
+// BridgeClient: a reconnecting WebSocket client for the NFC Browser Bridge (protocol v1).
 
 import {
   DEFAULT_URL,

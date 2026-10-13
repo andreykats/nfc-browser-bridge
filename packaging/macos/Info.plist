@@ -3,13 +3,13 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleIdentifier</key>
-    <string>dev.drey.topps-nfc-bridge</string>
+    <string>dev.drey.nfc-browser-bridge</string>
     <key>CFBundleName</key>
-    <string>Topps NFC Bridge</string>
+    <string>NFC Browser Bridge</string>
     <key>CFBundleDisplayName</key>
-    <string>Topps NFC Bridge</string>
+    <string>NFC Browser Bridge</string>
     <key>CFBundleExecutable</key>
-    <string>topps-nfc-bridge</string>
+    <string>nfc-browser-bridge</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>

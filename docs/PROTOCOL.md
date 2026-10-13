@@ -1,4 +1,4 @@
-# Topps NFC Bridge protocol, version 1
+# NFC Browser Bridge protocol, version 1
 
 This document is frozen for protocol version 1. Additive, backwards-compatible
 changes (new optional fields, new events that clients may ignore) are allowed;
@@ -66,7 +66,7 @@ Events have an `event` field and no `id`.
 Sent once, immediately after the connection opens.
 
 ```json
-{"event":"hello","protocol":1,"app":"topps-nfc-bridge","version":"0.1.0","service":"ready",
+{"event":"hello","protocol":1,"app":"nfc-browser-bridge","version":"0.1.0","service":"ready",
  "readers":[{"name":"ACS ACR1552 1S CL Reader PICC 0","kind":"picc","card":null}]}
 ```
 

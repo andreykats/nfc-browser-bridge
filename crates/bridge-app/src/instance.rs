@@ -1,4 +1,4 @@
-//! Is the process on our port another Topps NFC Bridge? Connect and read its `hello`.
+//! Is the process on our port another NFC Browser Bridge? Connect and read its `hello`.
 
 use std::io::ErrorKind;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};

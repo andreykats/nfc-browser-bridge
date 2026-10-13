@@ -1,4 +1,4 @@
-// An in-memory Topps NFC Bridge speaking protocol v1 over a fake WebSocket, with NTAG213/215/216
+// An in-memory NFC Browser Bridge speaking protocol v1 over a fake WebSocket, with NTAG213/215/216
 // memory images. For tests: `new BridgeClient({ WebSocket: fake.WebSocket })`.
 // Everything is delivered on microtasks, so it works with real and fake timers alike.
 
@@ -192,7 +192,7 @@ export class FakeBridge {
     s.deliver({
       event: "hello",
       protocol: PROTOCOL_VERSION,
-      app: "topps-nfc-bridge",
+      app: "nfc-browser-bridge",
       version: this.version,
       service: "ready",
       readers: this.publicReaders(),

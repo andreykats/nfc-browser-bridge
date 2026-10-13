@@ -55,7 +55,7 @@ fn check(current: &str) -> Result<Option<UpdateInfo>, ureq::Error> {
         .get(format!(
             "https://api.github.com/repos/{REPO}/releases/latest"
         ))
-        .header("User-Agent", format!("topps-nfc-bridge/{current}"))
+        .header("User-Agent", format!("nfc-browser-bridge/{current}"))
         .header("Accept", "application/vnd.github+json")
         .call()?
         .body_mut()
@@ -108,7 +108,7 @@ mod tests {
     fn reaches_github_over_os_tls() {
         let r: Release = agent()
             .get("https://api.github.com/repos/tauri-apps/tray-icon/releases/latest")
-            .header("User-Agent", "topps-nfc-bridge-test")
+            .header("User-Agent", "nfc-browser-bridge-test")
             .call()
             .unwrap()
             .body_mut()

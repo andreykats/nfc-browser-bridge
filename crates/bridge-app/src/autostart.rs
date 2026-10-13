@@ -5,9 +5,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
-const LABEL: &str = "dev.drey.topps-nfc-bridge";
+const LABEL: &str = "dev.drey.nfc-browser-bridge";
 #[cfg(windows)]
-const RUN_VALUE: &str = "ToppsNFCBridge";
+const RUN_VALUE: &str = "NFCBrowserBridge";
 
 #[derive(Debug)]
 pub enum AutostartError {
@@ -24,7 +24,7 @@ impl std::fmt::Display for AutostartError {
             Self::NotInstalled => {
                 write!(
                     f,
-                    "Move Topps NFC Bridge to the Applications folder and open it from there, then try again."
+                    "Move NFC Browser Bridge to the Applications folder and open it from there, then try again."
                 )
             }
             Self::Io(e) => write!(f, "{e}"),
@@ -186,13 +186,13 @@ mod tests {
     #[test]
     fn transient_locations() {
         assert!(is_transient_location(Path::new(
-            "/private/var/folders/x/T/AppTranslocation/ABC/d/Topps NFC Bridge.app/Contents/MacOS/topps-nfc-bridge"
+            "/private/var/folders/x/T/AppTranslocation/ABC/d/NFC Browser Bridge.app/Contents/MacOS/nfc-browser-bridge"
         )));
         assert!(is_transient_location(Path::new(
-            "/Volumes/Topps NFC Bridge/Topps NFC Bridge.app/Contents/MacOS/x"
+            "/Volumes/NFC Browser Bridge/NFC Browser Bridge.app/Contents/MacOS/x"
         )));
         assert!(!is_transient_location(Path::new(
-            "/Applications/Topps NFC Bridge.app/Contents/MacOS/topps-nfc-bridge"
+            "/Applications/NFC Browser Bridge.app/Contents/MacOS/nfc-browser-bridge"
         )));
     }
 

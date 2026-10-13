@@ -1,4 +1,4 @@
-//! Topps NFC Bridge: a menu-bar (macOS) / system-tray (Windows) app that runs the bridge core.
+//! NFC Browser Bridge: a menu-bar (macOS) / system-tray (Windows) app that runs the bridge core.
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -45,7 +45,7 @@ struct App {
 }
 
 impl App {
-    /// Start the bridge. Returns false if another Topps NFC Bridge already runs (caller exits).
+    /// Start the bridge. Returns false if another NFC Browser Bridge already runs (caller exits).
     fn start_bridge(&mut self) -> bool {
         let proxy = Mutex::new(self.proxy.clone());
         let listener: bridge_core::StatusListener = Arc::new(move |s: &BridgeStatus| {
@@ -77,7 +77,7 @@ impl App {
             }
             Err(e) => {
                 tracing::error!(error = %e, "cannot start bridge");
-                dialog("Topps NFC Bridge could not start", &e.to_string());
+                dialog("NFC Browser Bridge could not start", &e.to_string());
                 true
             }
         }
@@ -204,7 +204,7 @@ fn open(target: &str) {
 
 fn main() {
     let _log_guard = logging::init();
-    tracing::info!(version = VERSION, "Topps NFC Bridge starting");
+    tracing::info!(version = VERSION, "NFC Browser Bridge starting");
     autostart::refresh();
 
     #[allow(unused_mut)]
@@ -245,7 +245,7 @@ fn main() {
             Event::NewEvents(StartCause::Init) => {
                 if !app.start_bridge() {
                     tracing::info!("another instance is running; exiting");
-                    dialog("Topps NFC Bridge", "Topps NFC Bridge is already running. Look for its icon in the menu bar / system tray.");
+                    dialog("NFC Browser Bridge", "NFC Browser Bridge is already running. Look for its icon in the menu bar / system tray.");
                     *control_flow = ControlFlow::Exit;
                     return;
                 }
@@ -265,7 +265,7 @@ fn main() {
             }
             Event::UserEvent(UserEvent::RetryBind) => {
                 if app.bridge.is_none() && !app.start_bridge() {
-                    // The other app was a Topps NFC Bridge after all.
+                    // The other app was a NFC Browser Bridge after all.
                     app.tray = None;
                     *control_flow = ControlFlow::Exit;
                     return;

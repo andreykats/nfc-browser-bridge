@@ -1,5 +1,5 @@
-//! Daily-rotated log files (7 kept): ~/Library/Logs/ToppsNFCBridge on macOS,
-//! %LOCALAPPDATA%\ToppsNFCBridge\logs on Windows.
+//! Daily-rotated log files (7 kept): ~/Library/Logs/NFCBrowserBridge on macOS,
+//! %LOCALAPPDATA%\NFCBrowserBridge\logs on Windows.
 
 use std::path::PathBuf;
 
@@ -10,9 +10,9 @@ use tracing_subscriber::fmt::writer::MakeWriterExt;
 
 pub fn log_dir() -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
-    return dirs::home_dir().map(|h| h.join("Library/Logs/ToppsNFCBridge"));
+    return dirs::home_dir().map(|h| h.join("Library/Logs/NFCBrowserBridge"));
     #[cfg(not(target_os = "macos"))]
-    return dirs::data_local_dir().map(|d| d.join("ToppsNFCBridge").join("logs"));
+    return dirs::data_local_dir().map(|d| d.join("NFCBrowserBridge").join("logs"));
 }
 
 /// Start logging. Keep the guard alive for the life of the process. `RUST_LOG` overrides the level

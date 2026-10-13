@@ -3,13 +3,13 @@ name = "bridge-app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Topps NFC Bridge: exposes PC/SC NFC readers to web pages over a local WebSocket"
+description = "NFC Browser Bridge: exposes PC/SC NFC readers to web pages over a local WebSocket"
 
 [lib]
 path = "src/lib.rs"
 
 [[bin]]
-name = "topps-nfc-bridge"
+name = "nfc-browser-bridge"
 path = "src/main.rs"
 
 [dependencies]

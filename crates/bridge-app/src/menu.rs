@@ -43,7 +43,7 @@ fn short_uid(uid: &str) -> String {
 
 impl MenuModel {
     pub fn from_state(s: &AppState) -> Self {
-        let header = format!("Topps NFC Bridge v{}", env!("CARGO_PKG_VERSION"));
+        let header = format!("NFC Browser Bridge v{}", env!("CARGO_PKG_VERSION"));
         let mut readers = Vec::new();
         let mut icon = IconState::NoReader;
         let status = if s.port_conflict {
@@ -95,7 +95,7 @@ impl MenuModel {
             Some(st) if !st.clients.is_empty() => format!("Clients: {}", st.clients.join(", ")),
             _ => "Clients: none".to_string(),
         };
-        let tooltip = format!("Topps NFC Bridge — {status}");
+        let tooltip = format!("NFC Browser Bridge — {status}");
         Self {
             header,
             status,

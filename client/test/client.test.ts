@@ -132,7 +132,7 @@ describe("BridgeClient", () => {
     const errors: BridgeError[] = [];
     client.on("error", (e) => errors.push(e));
     fake.connected = (s) =>
-      s.deliver({ event: "hello", protocol: 2, app: "topps-nfc-bridge", version: "2.0.0", service: "ready", readers: [] });
+      s.deliver({ event: "hello", protocol: 2, app: "nfc-browser-bridge", version: "2.0.0", service: "ready", readers: [] });
     client.connect();
     await tick();
     expect(errors.map((e) => e.code)).toEqual(["protocol_mismatch"]);

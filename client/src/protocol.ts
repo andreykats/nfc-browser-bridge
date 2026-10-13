@@ -1,4 +1,4 @@
-// Topps NFC Bridge wire protocol, version 1. Mirrors docs/PROTOCOL.md exactly.
+// NFC Browser Bridge wire protocol, version 1. Mirrors docs/PROTOCOL.md exactly.
 
 export const PROTOCOL_VERSION = 1;
 export const DEFAULT_URL = "ws://127.0.0.1:38241/v1";
@@ -23,7 +23,7 @@ export interface Reader {
 export interface HelloEvent {
   event: "hello";
   protocol: number;
-  app: "topps-nfc-bridge";
+  app: "nfc-browser-bridge";
   version: string;
   service: ServiceStatus;
   readers: Reader[];

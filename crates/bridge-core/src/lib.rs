@@ -1,4 +1,4 @@
-//! Topps NFC Bridge core: PC/SC monitoring, serialized card access, and the protocol v1
+//! NFC Browser Bridge core: PC/SC monitoring, serialized card access, and the protocol v1
 //! WebSocket server. The tray app (bridge-app) is a thin shell around [`Bridge`].
 
 pub mod backend;

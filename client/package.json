@@ -1,7 +1,7 @@
 {
-  "name": "topps-nfc-bridge-client",
+  "name": "nfc-browser-bridge-client",
   "version": "0.1.0",
-  "description": "Zero-dependency TypeScript client for the Topps NFC Bridge (protocol v1), with NDEF/NTAG helpers",
+  "description": "Zero-dependency TypeScript client for the NFC Browser Bridge (protocol v1), with NDEF/NTAG helpers",
   "license": "MIT",
   "private": true,
   "type": "module",
