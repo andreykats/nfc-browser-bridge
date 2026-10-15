@@ -40,11 +40,13 @@ console.
 1. Download `NFC-Browser-Bridge-<version>-macos.dmg` from
    [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and drag
    **NFC Browser Bridge** to **Applications**. Start it from Applications, not
-   from the disk image, or "Start at login" will refuse to turn on.
+   from the disk image, or "Start at login" cannot turn on.
 2. The build is not signed by Apple, so the first launch is blocked. Open
    **System Settings → Privacy & Security**, scroll to the message about
    NFC Browser Bridge and click **Open Anyway**. This repeats after every update.
-3. A card icon appears in the menu bar. Turn on **Start at login** in its menu.
+3. A card icon appears in the menu bar. **Start at login** turns on by itself
+   the first time the app runs from Applications; it can be turned off in the
+   menu and stays off.
 
 ### Windows
 

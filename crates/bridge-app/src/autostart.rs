@@ -123,11 +123,49 @@ pub fn set_enabled(enabled: bool) -> Result<(), AutostartError> {
     Ok(())
 }
 
-/// If enabled, point the login item at this copy of the app (e.g. after it was moved).
+/// Written once "Start at login" has been turned on by default, so a later "off" sticks.
+#[cfg(target_os = "macos")]
+fn default_applied_marker() -> Option<PathBuf> {
+    dirs::data_dir().map(|d| d.join("NFCBrowserBridge/autostart-default-applied"))
+}
+
+/// macOS has no installer to tick "Start at login", so the first launch from an installed copy
+/// turns it on. Returns true if it did. A disk image or translocated copy is skipped (and retried
+/// next launch) because its path will not survive.
+#[cfg(target_os = "macos")]
+fn apply_default(exe: &Path) -> bool {
+    let Some(marker) = default_applied_marker() else {
+        return false;
+    };
+    if marker.exists() || is_transient_location(exe) {
+        return false;
+    }
+    if let Err(e) = set_enabled(true) {
+        tracing::warn!(error = %e, "cannot turn on start at login");
+        return false;
+    }
+    if let Err(e) = marker
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| std::fs::write(&marker, b""))
+    {
+        tracing::warn!(error = %e, "cannot record start-at-login default");
+    }
+    tracing::info!("start at login turned on (first launch)");
+    true
+}
+
+/// At launch: turn "Start at login" on by default the first time; if enabled, point the login
+/// item at this copy of the app (e.g. after it was moved).
 #[cfg(target_os = "macos")]
 pub fn refresh() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    if apply_default(&exe) {
+        return;
+    }
     if is_enabled()
-        && let Ok(exe) = std::env::current_exe()
         && !is_transient_location(&exe)
         && let Ok(path) = plist_path()
     {
@@ -171,7 +209,8 @@ pub fn set_enabled(enabled: bool) -> Result<(), AutostartError> {
     Ok(())
 }
 
-/// If enabled, point the Run value at this copy of the exe.
+/// If enabled, point the Run value at this copy of the exe. The installer's "Start at login"
+/// task (ticked by default) sets the initial state.
 #[cfg(windows)]
 pub fn refresh() {
     if is_enabled() {
