@@ -15,12 +15,15 @@ impl PcscError {
     pub const TIMEOUT: Self = Self(0x8010_000A);
     pub const SHARING_VIOLATION: Self = Self(0x8010_000B);
     pub const NO_SMARTCARD: Self = Self(0x8010_000C);
+    pub const PROTO_MISMATCH: Self = Self(0x8010_000F);
     pub const COMM_ERROR: Self = Self(0x8010_0013);
     pub const READER_UNAVAILABLE: Self = Self(0x8010_0017);
     pub const NO_SERVICE: Self = Self(0x8010_001D);
     pub const SERVICE_STOPPED: Self = Self(0x8010_001E);
     pub const NO_READERS_AVAILABLE: Self = Self(0x8010_002E);
+    pub const UNSUPPORTED_CARD: Self = Self(0x8010_0065);
     pub const UNRESPONSIVE_CARD: Self = Self(0x8010_0066);
+    pub const UNPOWERED_CARD: Self = Self(0x8010_0067);
     pub const RESET_CARD: Self = Self(0x8010_0068);
     pub const REMOVED_CARD: Self = Self(0x8010_0069);
 
@@ -29,6 +32,26 @@ impl PcscError {
         matches!(
             self,
             Self::NO_SERVICE | Self::SERVICE_STOPPED | Self::INVALID_HANDLE
+        )
+    }
+
+    /// A problem with the card or reader (or its sharing), not with the context. Any other error
+    /// means the context may be broken and should not be reused.
+    pub fn concerns_card(self) -> bool {
+        matches!(
+            self,
+            Self::TIMEOUT
+                | Self::SHARING_VIOLATION
+                | Self::NO_SMARTCARD
+                | Self::PROTO_MISMATCH
+                | Self::COMM_ERROR
+                | Self::UNKNOWN_READER
+                | Self::READER_UNAVAILABLE
+                | Self::UNSUPPORTED_CARD
+                | Self::UNRESPONSIVE_CARD
+                | Self::UNPOWERED_CARD
+                | Self::RESET_CARD
+                | Self::REMOVED_CARD
         )
     }
 }

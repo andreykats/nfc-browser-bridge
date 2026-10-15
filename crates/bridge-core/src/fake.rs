@@ -143,6 +143,8 @@ struct World {
     /// (operation, successful calls to let through first, error)
     faults: VecDeque<(FaultOp, u32, PcscError)>,
     sw_overrides: Vec<(Vec<u8>, [u8; 2], u32)>,
+    /// The next APDU takes this long (a reader that hangs).
+    transmit_delay: Option<Duration>,
     apdu_log: Vec<(String, Vec<u8>)>,
     disconnects: Vec<Disposition>,
     resets: u32,
@@ -285,6 +287,11 @@ impl FakePcsc {
     /// The next `times` APDUs starting with `prefix` answer `sw` without executing.
     pub fn override_sw(&self, prefix: &[u8], sw: [u8; 2], times: u32) {
         self.changed(|w| w.sw_overrides.push((prefix.to_vec(), sw, times)));
+    }
+
+    /// The next APDU takes `d` to answer.
+    pub fn delay_next_transmit(&self, d: Duration) {
+        self.changed(|w| w.transmit_delay = Some(d));
     }
 
     pub fn apdu_log(&self) -> Vec<(String, Vec<u8>)> {
@@ -462,6 +469,11 @@ impl FakeHandle {
 
 impl Transmit for FakeHandle {
     fn transmit(&self, apdu: &[u8]) -> Result<Vec<u8>, PcscError> {
+        // Sleep without the world lock, so only this caller hangs.
+        let delay = self.ctx.lock().transmit_delay.take();
+        if let Some(d) = delay {
+            std::thread::sleep(d);
+        }
         self.with_card(|w, idx| {
             w.take_fault(FaultOp::Transmit)?;
             w.apdu_log.push((self.reader.clone(), apdu.to_vec()));

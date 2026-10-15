@@ -13,6 +13,7 @@ use std::time::Duration;
 use tokio::sync::oneshot;
 
 use crate::backend::{Disposition, PcscBackend, PcscCard, PcscContext, PcscError};
+use crate::health::{Health, Part};
 use crate::hub::Hub;
 use crate::protocol::{ApduResponse, BridgeError, ErrorCode, encode_hex};
 
@@ -37,6 +38,9 @@ pub enum Job {
 
 const QUEUE: usize = 64;
 const SHARING_RETRY_DELAYS_MS: [u64; 3] = [50, 100, 200];
+/// A card swiped past the reader often fails its first command; the kiosk ignores a tap without a
+/// UID, so the UID read is retried before giving up.
+const UID_RETRY_DELAYS_MS: [u64; 2] = [50, 150];
 const GET_UID: [u8; 5] = [0xFF, 0xCA, 0x00, 0x00, 0x00];
 
 #[derive(Clone)]
@@ -62,7 +66,11 @@ impl WorkerHandle {
 }
 
 /// Start the worker. It exits when every `WorkerHandle` has been dropped.
-pub fn spawn<B: PcscBackend>(backend: Arc<B>, hub: Arc<Hub>) -> (WorkerHandle, JoinHandle<()>) {
+pub fn spawn<B: PcscBackend>(
+    backend: Arc<B>,
+    hub: Arc<Hub>,
+    health: Arc<Health>,
+) -> (WorkerHandle, JoinHandle<()>) {
     let (tx, rx) = sync_channel(QUEUE);
     let thread = std::thread::Builder::new()
         .name("pcsc-worker".into())
@@ -70,6 +78,7 @@ pub fn spawn<B: PcscBackend>(backend: Arc<B>, hub: Arc<Hub>) -> (WorkerHandle, J
             Worker {
                 backend,
                 hub,
+                health,
                 ctx: None,
                 held: HashMap::new(),
             }
@@ -82,6 +91,7 @@ pub fn spawn<B: PcscBackend>(backend: Arc<B>, hub: Arc<Hub>) -> (WorkerHandle, J
 struct Worker<B: PcscBackend> {
     backend: Arc<B>,
     hub: Arc<Hub>,
+    health: Arc<Health>,
     ctx: Option<B::Context>,
     /// Idle handles keeping present cards powered, by reader.
     held: HashMap<String, <B::Context as PcscContext>::Card>,
@@ -90,46 +100,67 @@ struct Worker<B: PcscBackend> {
 impl<B: PcscBackend> Worker<B> {
     fn run(mut self, rx: Receiver<Job>) {
         for job in rx {
-            match job {
-                Job::ReadUid { reader, generation } => {
-                    match self.with_card(&reader, read_uid) {
-                        Ok(uid) => {
-                            self.hold(&reader);
-                            self.hub.card_identified(&reader, generation, uid);
-                        }
-                        // Gone already, or the service died: the monitor will clean up.
-                        Err(e) if is_card_gone(e) || e.is_service_lost() => {}
-                        Err(e) => {
-                            tracing::warn!(%reader, pcsc = %e, "reading UID failed");
-                            self.hold(&reader);
-                            self.hub.card_identified(&reader, generation, None);
-                        }
+            let health = self.health.clone();
+            health.busy(Part::Worker, || self.handle(job));
+        }
+    }
+
+    fn handle(&mut self, job: Job) {
+        match job {
+            Job::ReadUid { reader, generation } => {
+                match self.identify(&reader) {
+                    Ok(uid) => {
+                        self.hold(&reader);
+                        self.hub.card_identified(&reader, generation, uid);
                     }
-                }
-                Job::Release { reader } => {
-                    if let Some(card) = self.held.remove(&reader) {
-                        let _ = card.disconnect(Disposition::LeaveCard);
+                    // Gone already, or the service died: the monitor will clean up.
+                    Err(e) if is_card_gone(e) || e.is_service_lost() => {}
+                    Err(e) => {
+                        tracing::warn!(%reader, pcsc = %e, "reading UID failed");
+                        self.hold(&reader);
+                        self.hub.card_identified(&reader, generation, None);
                     }
-                }
-                Job::Transmit {
-                    reader,
-                    apdus,
-                    stop_on_error,
-                    reply,
-                } => {
-                    let _ = reply.send(self.transmit(&reader, &apdus, stop_on_error));
-                }
-                Job::Reset { reader, reply } => {
-                    let result = self.with_card(&reader, |card| {
-                        card.reconnect_reset().map(|atr| encode_hex(&atr))
-                    });
-                    if let Ok(atr) = &result {
-                        tracing::info!(%reader, %atr, "card reset");
-                    }
-                    let _ = reply.send(result.map_err(BridgeError::from_pcsc));
                 }
             }
+            Job::Release { reader } => {
+                if let Some(card) = self.held.remove(&reader) {
+                    let _ = card.disconnect(Disposition::LeaveCard);
+                }
+            }
+            Job::Transmit {
+                reader,
+                apdus,
+                stop_on_error,
+                reply,
+            } => {
+                let _ = reply.send(self.transmit(&reader, &apdus, stop_on_error));
+            }
+            Job::Reset { reader, reply } => {
+                let result = self.with_card(&reader, |card| {
+                    card.reconnect_reset().map(|atr| encode_hex(&atr))
+                });
+                if let Ok(atr) = &result {
+                    tracing::info!(%reader, %atr, "card reset");
+                }
+                let _ = reply.send(result.map_err(BridgeError::from_pcsc));
+            }
         }
+    }
+
+    /// Read the UID, retrying failures other than the card or the service going away.
+    fn identify(&mut self, reader: &str) -> Result<Option<String>, PcscError> {
+        let mut result = self.with_card(reader, read_uid);
+        for delay in UID_RETRY_DELAYS_MS {
+            match result {
+                Err(e) if !is_card_gone(e) && !e.is_service_lost() => {
+                    tracing::debug!(%reader, pcsc = %e, "reading UID failed; retrying");
+                    std::thread::sleep(Duration::from_millis(delay));
+                    result = self.with_card(reader, read_uid);
+                }
+                _ => break,
+            }
+        }
+        result
     }
 
     /// Keep an idle shared handle to the card on `reader` until `Job::Release`.
@@ -164,6 +195,7 @@ impl<B: PcscBackend> Worker<B> {
 
     /// Connect (retrying sharing violations), run `f`, disconnect. A PC/SC error from `f` resets the card.
     /// If a cached context turns out to be dead (the service restarted), retry once on a fresh one.
+    /// Any other error that is not about the card drops the context, so the next job starts afresh.
     fn with_card<T>(
         &mut self,
         reader: &str,
@@ -180,7 +212,13 @@ impl<B: PcscBackend> Worker<B> {
                     }
                     return Err(e);
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    if !e.concerns_card() {
+                        tracing::warn!(%reader, pcsc = %e, "connect failed; dropping the context");
+                        self.drop_context();
+                    }
+                    return Err(e);
+                }
             };
             let result = f(&mut card);
             let disposition = if result.is_ok() {
@@ -192,8 +230,11 @@ impl<B: PcscBackend> Worker<B> {
                 tracing::debug!(%reader, pcsc = %e, "disconnect failed");
             }
             if let Err(e) = result
-                && e.is_service_lost()
+                && !e.concerns_card()
             {
+                if !e.is_service_lost() {
+                    tracing::warn!(%reader, pcsc = %e, "card command failed; dropping the context");
+                }
                 self.drop_context();
             }
             return result;

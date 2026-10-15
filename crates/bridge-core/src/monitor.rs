@@ -6,11 +6,14 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::backend::{PNP_READER, PcscBackend, PcscContext, PcscError, ReaderWatch, state};
+use crate::health::{Health, Part};
 use crate::hub::Hub;
 use crate::protocol::{ReaderKind, ServiceStatus, encode_hex};
 use crate::worker::{Job, WorkerHandle};
 
 const STATUS_TIMEOUT: Duration = Duration::from_secs(1);
+/// Consecutive unexpected PC/SC failures before the context is treated as broken and re-established.
+const MAX_FAILURES: u32 = 5;
 const BACKOFF: [Duration; 3] = [
     Duration::from_secs(1),
     Duration::from_secs(2),
@@ -63,6 +66,7 @@ pub fn spawn<B: PcscBackend>(
     backend: Arc<B>,
     hub: Arc<Hub>,
     worker: WorkerHandle,
+    health: Arc<Health>,
 ) -> MonitorHandle<B::Context> {
     let stopper = Arc::new(Stopper::default());
     let ctx = Arc::new(Mutex::new(None));
@@ -70,6 +74,7 @@ pub fn spawn<B: PcscBackend>(
         backend,
         hub,
         worker,
+        health,
         stopper: stopper.clone(),
         ctx_slot: ctx.clone(),
     };
@@ -88,6 +93,7 @@ struct Monitor<B: PcscBackend> {
     backend: Arc<B>,
     hub: Arc<Hub>,
     worker: WorkerHandle,
+    health: Arc<Health>,
     stopper: Arc<Stopper>,
     /// The live context, so `stop` can cancel a blocking call.
     ctx_slot: Arc<Mutex<Option<B::Context>>>,
@@ -97,7 +103,7 @@ impl<B: PcscBackend> Monitor<B> {
     fn run(self) {
         let mut attempt = 0;
         while !self.stopper.is_stopped() {
-            match self.backend.establish() {
+            match self.health.busy(Part::Monitor, || self.backend.establish()) {
                 Ok(ctx) => {
                     *self.ctx_slot.lock().unwrap() = Some(ctx.clone());
                     // Re-check: stop() may have run before the context was visible to it.
@@ -126,11 +132,14 @@ impl<B: PcscBackend> Monitor<B> {
     fn watch(&self, ctx: &B::Context) -> bool {
         let mut watches = vec![ReaderWatch::new(PNP_READER)];
         let mut worked = false;
+        let mut failures = 0;
         loop {
             if self.stopper.is_stopped() {
                 return worked;
             }
-            match ctx.list_readers() {
+            // The unexpected error of this round, if any.
+            let mut fault = None;
+            match self.health.busy(Part::Monitor, || ctx.list_readers()) {
                 Ok(names) => {
                     if !worked {
                         worked = true;
@@ -150,31 +159,54 @@ impl<B: PcscBackend> Monitor<B> {
                     tracing::info!(pcsc = %e, "smart card service lost");
                     return worked;
                 }
-                Err(e) => tracing::warn!(pcsc = %e, "list readers failed"),
+                Err(e) => {
+                    tracing::warn!(pcsc = %e, "list readers failed");
+                    fault = Some(e);
+                }
             }
 
+            // Wait before the next round only after a failed wait, so errors cannot spin.
+            let mut pause = false;
             if watches.is_empty() {
                 if self.stopper.sleep(STATUS_TIMEOUT) {
                     return worked;
                 }
-                continue;
-            }
-
-            match ctx.get_status_change(STATUS_TIMEOUT, &mut watches) {
-                Ok(()) => self.process(&mut watches),
-                Err(PcscError::TIMEOUT | PcscError::CANCELLED) => {}
-                // A reader vanished between listing and waiting; the next listing fixes it.
-                Err(PcscError::UNKNOWN_READER | PcscError::READER_UNAVAILABLE) => {}
-                Err(e) if e.is_service_lost() => {
-                    tracing::info!(pcsc = %e, "smart card service lost");
-                    return worked;
-                }
-                Err(e) => {
-                    tracing::warn!(pcsc = %e, "get status change failed");
-                    if self.stopper.sleep(STATUS_TIMEOUT) {
+            } else {
+                match self.health.busy(Part::Monitor, || {
+                    ctx.get_status_change(STATUS_TIMEOUT, &mut watches)
+                }) {
+                    Ok(()) => self.process(&mut watches),
+                    Err(PcscError::TIMEOUT | PcscError::CANCELLED) => {}
+                    Err(e) if e.is_service_lost() => {
+                        tracing::info!(pcsc = %e, "smart card service lost");
                         return worked;
                     }
+                    // A reader vanished between listing and waiting: the next listing fixes it, so
+                    // re-list at once the first time.
+                    Err(e @ (PcscError::UNKNOWN_READER | PcscError::READER_UNAVAILABLE)) => {
+                        pause = failures > 0;
+                        fault = Some(e);
+                    }
+                    Err(e) => {
+                        tracing::warn!(pcsc = %e, "get status change failed");
+                        pause = true;
+                        fault = Some(e);
+                    }
                 }
+            }
+
+            let Some(e) = fault else {
+                failures = 0;
+                continue;
+            };
+            failures += 1;
+            // Errors that persist mean the context itself is broken: start over with a new one.
+            if failures >= MAX_FAILURES {
+                tracing::warn!(pcsc = %e, "PC/SC keeps failing; re-establishing the context");
+                return worked;
+            }
+            if pause && self.stopper.sleep(STATUS_TIMEOUT) {
+                return worked;
             }
         }
     }

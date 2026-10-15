@@ -608,3 +608,97 @@ async fn holds_one_handle_while_a_card_is_present() {
     assert!(released.is_ok(), "handle released after reader removal");
     bridge.shutdown();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn uid_read_is_retried_after_a_glitch() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R1);
+    let bridge = start(&fake);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R1)).await;
+
+    // A card swiped past the reader fails its first command.
+    fake.fail_next(FaultOp::Transmit, PcscError::COMM_ERROR);
+    fake.insert_card(R1, FakeCard::ntag(NtagType::Ntag215, UID));
+    let ev = recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    assert_eq!(ev["uid"], UID_HEX);
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn persistent_errors_re_establish_the_context() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R1);
+    let bridge = start(&fake);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R1)).await;
+
+    // An error that is not "service lost" but never goes away.
+    for _ in 0..5 {
+        fake.fail_next(FaultOp::GetStatusChange, PcscError::INTERNAL_ERROR);
+    }
+    fake.add_reader(R2);
+    recv_until(&mut ws, |v| {
+        v["event"] == "readers" && v["service"] == "unavailable"
+    })
+    .await;
+    recv_until(&mut ws, |v| {
+        v["event"] == "readers" && v["service"] == "ready" && has_reader(v, R2)
+    })
+    .await;
+    // The new context works.
+    fake.insert_card(R1, FakeCard::ntag(NtagType::Ntag215, UID));
+    let ev = recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    assert_eq!(ev["uid"], UID_HEX);
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_vanished_reader_does_not_spin_the_monitor() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R1);
+    let bridge = start(&fake);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R1)).await;
+
+    // The reader keeps being listed but cannot be watched: the monitor re-lists at once, then
+    // waits between attempts and finally starts over with a new context.
+    for _ in 0..4 {
+        fake.fail_next(FaultOp::GetStatusChange, PcscError::UNKNOWN_READER);
+    }
+    let started = std::time::Instant::now();
+    fake.insert_card(R1, FakeCard::ntag(NtagType::Ntag215, UID));
+    recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    assert!(
+        started.elapsed() >= Duration::from_secs(2),
+        "waited between failed attempts"
+    );
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hung_card_call_is_reported_as_a_stall() {
+    use bridge_core::health::Part;
+    let fake = FakePcsc::new();
+    fake.add_reader(R1);
+    let bridge = start(&fake);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R1)).await;
+    let health = bridge.health();
+    // Above the monitor's 1 s status wait, which is a normal call.
+    let limit = Duration::from_millis(1500);
+    assert_eq!(health.stalled(limit), None);
+
+    // Idle waiting (monitor between taps, worker without jobs) is not a stall.
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        assert_eq!(health.stalled(limit), None);
+    }
+
+    fake.delay_next_transmit(Duration::from_secs(3));
+    fake.insert_card(R1, FakeCard::ntag(NtagType::Ntag215, UID));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let stall = health.stalled(limit).expect("worker reported as stuck");
+    assert_eq!(stall.part, Part::Worker);
+
+    // It recovers on its own once the call returns.
+    recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    assert_eq!(health.stalled(limit), None);
+    bridge.shutdown();
+}

@@ -3,6 +3,7 @@
 
 pub mod backend;
 pub mod fake;
+pub mod health;
 pub mod hub;
 pub mod monitor;
 pub mod protocol;
@@ -18,6 +19,7 @@ use std::thread::JoinHandle;
 use tokio::sync::watch;
 
 use backend::PcscBackend;
+use health::Health;
 use hub::Hub;
 pub use hub::{BridgeStatus, ServerState, StatusListener};
 
@@ -58,6 +60,7 @@ impl std::error::Error for StartError {}
 pub struct Bridge<B: PcscBackend> {
     addr: SocketAddr,
     hub: Arc<Hub>,
+    health: Arc<Health>,
     monitor: monitor::MonitorHandle<B::Context>,
     worker_thread: JoinHandle<()>,
     server_thread: JoinHandle<()>,
@@ -84,8 +87,9 @@ impl<B: PcscBackend> Bridge<B> {
             .map_err(StartError::Io)?;
         let hub = Arc::new(Hub::new(listener));
         let backend = Arc::new(backend);
-        let (worker, worker_thread) = worker::spawn(backend.clone(), hub.clone());
-        let monitor = monitor::spawn(backend, hub.clone(), worker.clone());
+        let health = Arc::new(Health::default());
+        let (worker, worker_thread) = worker::spawn(backend.clone(), hub.clone(), health.clone());
+        let monitor = monitor::spawn(backend, hub.clone(), worker.clone(), health.clone());
 
         let (shutdown, shutdown_rx) = watch::channel(false);
         let ctx = server::ServerCtx {
@@ -117,6 +121,7 @@ impl<B: PcscBackend> Bridge<B> {
         Ok(Self {
             addr,
             hub,
+            health,
             monitor,
             worker_thread,
             server_thread,
@@ -130,6 +135,11 @@ impl<B: PcscBackend> Bridge<B> {
 
     pub fn status(&self) -> (protocol::ServiceStatus, Vec<protocol::Reader>) {
         self.hub.status_snapshot()
+    }
+
+    /// What the monitor and worker threads are doing, for a watchdog.
+    pub fn health(&self) -> Arc<Health> {
+        self.health.clone()
     }
 
     /// Stop everything and wait for the threads to exit.

@@ -29,6 +29,8 @@ use crate::worker::{Job, WorkerHandle};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(90);
+/// A client that stops reading (e.g. a hung tab) fills the socket buffer; give up on it after this.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 pub struct ServerCtx {
@@ -189,7 +191,7 @@ async fn connection(stream: TcpStream, ctx: ServerCtx, mut shutdown: watch::Rece
                         tracing::info!("client idle; closing");
                         break;
                     }
-                    if sink.send(Message::Ping(Bytes::new())).await.is_err() {
+                    if send(&mut sink, Message::Ping(Bytes::new())).await.is_err() {
                         break;
                     }
                 }
@@ -200,8 +202,8 @@ async fn connection(stream: TcpStream, ctx: ServerCtx, mut shutdown: watch::Rece
             }
         }
     }
-    let _ = sink.send(Message::Close(close)).await;
-    let _ = sink.close().await;
+    let _ = send(&mut sink, Message::Close(close)).await;
+    let _ = tokio::time::timeout(SEND_TIMEOUT, sink.close()).await;
     ctx.hub.remove_client(client_id);
 }
 
@@ -211,7 +213,22 @@ where
     T: serde::Serialize,
 {
     let text = serde_json::to_string(value).map_err(|_| ())?;
-    sink.send(Message::text(text)).await.map_err(|_| ())
+    send(sink, Message::text(text)).await
+}
+
+/// Send one message; fails if the socket is gone or the client has not read for `SEND_TIMEOUT`.
+async fn send<S>(sink: &mut S, msg: Message) -> Result<(), ()>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    match tokio::time::timeout(SEND_TIMEOUT, sink.send(msg)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(()),
+        Err(_) => {
+            tracing::info!("client stopped reading; closing");
+            Err(())
+        }
+    }
 }
 
 /// Handle one request. Immediate answers are returned; card jobs answer later through `out`.
