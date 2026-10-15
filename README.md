@@ -37,8 +37,8 @@ console.
 
 ### macOS
 
-1. Download `NFC-Browser-Bridge-<version>-macos.dmg` from
-   [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and drag
+1. Download [NFC-Browser-Bridge-macos.dmg](https://github.com/andreykats/nfc-browser-bridge/releases/latest/download/NFC-Browser-Bridge-macos.dmg)
+   from the latest release and drag
    **NFC Browser Bridge** to **Applications**. Start it from Applications, not
    from the disk image, or "Start at login" cannot turn on.
 2. The build is not signed by Apple, so the first launch is blocked. Open
@@ -50,9 +50,8 @@ console.
 
 ### Windows
 
-1. Download `NFC-Browser-Bridge-<version>-windows-setup.exe` from
-   [Releases](https://github.com/andreykats/nfc-browser-bridge/releases) and run
-   it. No administrator rights are needed.
+1. Download [NFC-Browser-Bridge-windows-setup.exe](https://github.com/andreykats/nfc-browser-bridge/releases/latest/download/NFC-Browser-Bridge-windows-setup.exe)
+   from the latest release and run it. No administrator rights are needed.
 2. The installer is not signed, so SmartScreen warns about it: choose
    **More info → Run anyway**.
 3. "Start at login" is selected by default in the installer and can be changed

@@ -29,7 +29,7 @@ if [ "$DMG" = "--dmg" ]; then
     STAGE=$(mktemp -d)
     cp -R "$APP" "$STAGE/"
     ln -s /Applications "$STAGE/Applications"
-    IMG="$OUT/NFC-Browser-Bridge-$VERSION-macos.dmg"
+    IMG="$OUT/NFC-Browser-Bridge-macos.dmg"
     rm -f "$IMG"
     hdiutil create -volname "NFC Browser Bridge" -srcfolder "$STAGE" -ov -format UDZO "$IMG" >/dev/null
     rm -rf "$STAGE"

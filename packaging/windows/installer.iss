@@ -37,7 +37,7 @@ WizardStyle=modern
 Compression=lzma2
 SolidCompression=yes
 OutputDir=.
-OutputBaseFilename=NFC-Browser-Bridge-{#AppVersion}-windows-setup
+OutputBaseFilename=NFC-Browser-Bridge-windows-setup
 
 [Tasks]
 Name: "startup"; Description: "Start {#AppName} when I sign in"
