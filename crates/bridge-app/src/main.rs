@@ -6,11 +6,13 @@ mod autostart;
 mod instance;
 mod logging;
 mod menu;
+mod supervisor;
 mod update;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use bridge_core::health::Health;
 use bridge_core::protocol::DEFAULT_PORT;
 use bridge_core::real::RealPcsc;
 use bridge_core::{Bridge, BridgeConfig, BridgeStatus, StartError};
@@ -27,6 +29,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// macOS menu-bar icons are template images, tinted by the system for light/dark menu bars.
 const TEMPLATE_ICONS: bool = cfg!(target_os = "macos");
 const RETRY_BIND: Duration = Duration::from_secs(5);
+const WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
+/// Far above any real PC/SC call (a full-tag write takes about 1 s, a status wait 1 s).
+const STALL_LIMIT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 enum UserEvent {
@@ -45,7 +50,8 @@ struct App {
 }
 
 impl App {
-    /// Start the bridge. Returns false if another NFC Browser Bridge already runs (caller exits).
+    /// Start the bridge, retrying in the background on failure. Returns false if another NFC Browser
+    /// Bridge already runs (caller exits).
     fn start_bridge(&mut self) -> bool {
         let proxy = Mutex::new(self.proxy.clone());
         let listener: bridge_core::StatusListener = Arc::new(move |s: &BridgeStatus| {
@@ -54,33 +60,31 @@ impl App {
                 .unwrap_or_else(|e| e.into_inner())
                 .send_event(UserEvent::Status(s.clone()));
         });
-        match Bridge::start(RealPcsc, BridgeConfig::default(), Some(listener)) {
+        let e = match Bridge::start(RealPcsc, BridgeConfig::default(), Some(listener)) {
             Ok(b) => {
+                watchdog(b.health());
                 self.bridge = Some(b);
-                self.state.port_conflict = false;
-                true
+                self.state.start_error = None;
+                return true;
             }
-            Err(StartError::PortInUse) => {
-                if instance::is_our_bridge(DEFAULT_PORT) {
-                    return false;
-                }
-                if !self.state.port_conflict {
-                    tracing::warn!(port = DEFAULT_PORT, "port in use by another app; retrying");
-                }
-                self.state.port_conflict = true;
-                let proxy = self.proxy.clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(RETRY_BIND);
-                    let _ = proxy.send_event(UserEvent::RetryBind);
-                });
-                true
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "cannot start bridge");
-                dialog("NFC Browser Bridge could not start", &e.to_string());
-                true
-            }
+            Err(e) => e,
+        };
+        let message = match &e {
+            StartError::PortInUse if instance::is_our_bridge(DEFAULT_PORT) => return false,
+            StartError::PortInUse => format!("Port {DEFAULT_PORT} in use by another app"),
+            StartError::Io(e) => format!("Cannot start: {e}"),
+        };
+        // Nobody may be around to answer a dialog on a kiosk: show it in the menu and keep trying.
+        if self.state.start_error.as_ref() != Some(&message) {
+            tracing::warn!(error = %e, "cannot start bridge; retrying");
         }
+        self.state.start_error = Some(message);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(RETRY_BIND);
+            let _ = proxy.send_event(UserEvent::RetryBind);
+        });
+        true
     }
 
     /// Bring the tray in line with the current state.
@@ -165,6 +169,38 @@ impl App {
     }
 }
 
+/// A PC/SC call that never returns cannot be interrupted: exit, and the supervisor starts a fresh
+/// bridge.
+fn watchdog(health: Arc<Health>) {
+    let spawned = std::thread::Builder::new()
+        .name("watchdog".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(WATCHDOG_INTERVAL);
+                if let Some(stall) = health.stalled(STALL_LIMIT) {
+                    tracing::error!(%stall, "restarting the bridge");
+                    std::process::exit(supervisor::EXIT_STALLED);
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        tracing::warn!(error = %e, "cannot start the watchdog");
+    }
+}
+
+/// Keep macOS from putting the menu-bar app in App Nap, which throttles its timers and priority
+/// while it has no visible window. Idle system sleep stays allowed.
+#[cfg(target_os = "macos")]
+fn keep_out_of_app_nap() {
+    use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+    let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+        &NSString::from_str("Waiting for NFC tags"),
+    );
+    // The activity lasts as long as the process.
+    std::mem::forget(activity);
+}
+
 fn icon(state: IconState) -> Icon {
     let (size, template) = if TEMPLATE_ICONS {
         (44, true)
@@ -203,9 +239,15 @@ fn open(target: &str) {
 }
 
 fn main() {
-    let _log_guard = logging::init();
+    logging::init();
+    if !supervisor::is_child() {
+        // Returns only if the app cannot run as a child; then it runs here, unsupervised.
+        supervisor::run();
+    }
     tracing::info!(version = VERSION, "NFC Browser Bridge starting");
     autostart::refresh();
+    #[cfg(target_os = "macos")]
+    keep_out_of_app_nap();
 
     #[allow(unused_mut)]
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();

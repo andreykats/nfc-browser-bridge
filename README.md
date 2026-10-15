@@ -110,6 +110,9 @@ the websites currently connected.
   Daily files, last 7 kept. Start the app with `RUST_LOG=debug` to log APDUs.
 - **"Port 38241 in use by another app":** another program listens on the
   bridge's port. The bridge retries every 5 seconds.
+- **Unattended use:** the app runs the bridge as a child process and starts it
+  again if it crashes or a reader call hangs for 30 seconds (the log says
+  "bridge exited abnormally; restarting"). Only **Quit** stops it for good.
 - **"Smart card service unavailable" (macOS) / "No reader connected" (Windows):**
   Windows stops its smart-card service when the last reader is unplugged; plug
   the reader in and the bridge reconnects automatically.

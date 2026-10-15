@@ -3,7 +3,6 @@
 
 use std::path::PathBuf;
 
-use tracing_appender::non_blocking::WorkerGuard;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
@@ -15,9 +14,11 @@ pub fn log_dir() -> Option<PathBuf> {
     return dirs::data_local_dir().map(|d| d.join("NFCBrowserBridge").join("logs"));
 }
 
-/// Start logging. Keep the guard alive for the life of the process. `RUST_LOG` overrides the level
-/// (e.g. `RUST_LOG=debug` logs APDUs).
-pub fn init() -> Option<WorkerGuard> {
+/// Start logging. `RUST_LOG` overrides the level (e.g. `RUST_LOG=debug` logs APDUs).
+///
+/// Lines are written synchronously (the bridge logs a few lines per tap), so the panic hook's line
+/// is on disk before the process exits.
+pub fn init() {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let file = log_dir().and_then(|dir| {
         std::fs::create_dir_all(&dir).ok()?;
@@ -29,21 +30,19 @@ pub fn init() -> Option<WorkerGuard> {
             .build(&dir)
             .ok()
     });
-    let guard = match file {
-        Some(appender) => {
-            let (writer, guard) = tracing_appender::non_blocking(appender);
-            tracing_subscriber::fmt()
-                .with_env_filter(filter)
-                .with_ansi(false)
-                .with_writer(writer.and(std::io::stderr))
-                .init();
-            Some(guard)
-        }
-        None => {
-            tracing_subscriber::fmt().with_env_filter(filter).init();
-            None
-        }
-    };
-    std::panic::set_hook(Box::new(|info| tracing::error!("panic: {info}")));
-    guard
+    match file {
+        Some(appender) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_ansi(false)
+            .with_writer(appender.and(std::io::stderr))
+            .init(),
+        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
+    }
+    // A panic kills only its own thread; the rest of the bridge would carry on half-dead (e.g. no
+    // card events but still accepting connections and holding the port). Exit instead, so the
+    // supervisor starts a whole new bridge.
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("panic: {info}");
+        std::process::exit(crate::supervisor::EXIT_PANIC);
+    }));
 }

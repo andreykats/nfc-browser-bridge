@@ -16,7 +16,8 @@ pub const ID_QUIT: &str = "quit";
 #[derive(Debug, Clone, Default)]
 pub struct AppState {
     pub status: Option<BridgeStatus>,
-    pub port_conflict: bool,
+    /// Why the bridge is not running yet (it keeps retrying).
+    pub start_error: Option<String>,
     pub autostart: bool,
     pub update: Option<UpdateInfo>,
 }
@@ -46,8 +47,8 @@ impl MenuModel {
         let header = format!("NFC Browser Bridge v{}", env!("CARGO_PKG_VERSION"));
         let mut readers = Vec::new();
         let mut icon = IconState::NoReader;
-        let status = if s.port_conflict {
-            format!("Port {DEFAULT_PORT} in use by another app")
+        let status = if let Some(e) = &s.start_error {
+            e.clone()
         } else {
             match &s.status {
                 None => "Starting…".to_string(),
@@ -186,7 +187,7 @@ mod tests {
         assert_eq!(m.status, "No reader connected");
         assert_eq!(m.icon, IconState::NoReader);
         let m = MenuModel::from_state(&AppState {
-            port_conflict: true,
+            start_error: Some("Port 38241 in use by another app".into()),
             ..Default::default()
         });
         assert_eq!(m.status, "Port 38241 in use by another app");
