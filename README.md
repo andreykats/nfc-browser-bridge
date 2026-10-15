@@ -130,9 +130,11 @@ cargo run -p bridge-core --example serve     # bridge without the tray
 ```
 
 Hardware tools and the release checklist are in
-[docs/HARDWARE.md](docs/HARDWARE.md). Releases are built by
-[`.github/workflows/release.yml`](.github/workflows/release.yml) when a `v*`
-tag is pushed; the test site is published to GitHub Pages by
+[docs/HARDWARE.md](docs/HARDWARE.md). Releases are published by running
+[`.github/workflows/release.yml`](.github/workflows/release.yml) from the
+Actions tab. Each run is numbered automatically as the next `v1.0.N` (the
+series comes from the workspace version in `Cargo.toml`; never create `v*` tags
+by hand); the test site is published to GitHub Pages by
 [`pages.yml`](.github/workflows/pages.yml).
 
 ## License

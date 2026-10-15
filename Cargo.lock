@@ -84,7 +84,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "bridge-core",
  "dirs",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "bridge-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "futures-util",
  "pcsc",

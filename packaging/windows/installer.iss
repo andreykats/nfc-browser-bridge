@@ -1,5 +1,5 @@
 ; NFC Browser Bridge — per-user installer (no admin rights).
-; Build: iscc /DAppVersion=0.1.0 /DExePath=..\..\target\x86_64-pc-windows-msvc\release\nfc-browser-bridge.exe installer.iss
+; Build: iscc /DAppVersion=1.0.1 /DExePath=..\..\target\x86_64-pc-windows-msvc\release\nfc-browser-bridge.exe installer.iss
 
 #ifndef AppVersion
   #error Pass /DAppVersion=x.y.z
