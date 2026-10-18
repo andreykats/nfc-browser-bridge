@@ -351,10 +351,7 @@ mod tests {
 
     #[test]
     fn origin_labels() {
-        assert_eq!(
-            origin_label(Some("https://example.com")),
-            "example.com"
-        );
+        assert_eq!(origin_label(Some("https://example.com")), "example.com");
         assert_eq!(
             origin_label(Some("http://localhost:5173")),
             "localhost:5173"
