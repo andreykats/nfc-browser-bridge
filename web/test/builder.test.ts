@@ -5,12 +5,12 @@ import { decodeText, decodeUri, parseNdef, encodeNdef } from "../../client/src/n
 describe("entryToRecord", () => {
   it("builds URI, Text and MIME records", () => {
     const recs = [
-      entryToRecord({ kind: "uri", uri: "https://topps.drey.dev/c/9" }),
+      entryToRecord({ kind: "uri", uri: "https://example.com/c/9" }),
       entryToRecord({ kind: "text", text: "hi", lang: "en-US", encoding: "utf-16" }),
       entryToRecord({ kind: "mime", mimeType: "application/json", payload: "{}" }),
     ];
     const back = parseNdef(encodeNdef(recs));
-    expect(decodeUri(back[0])).toBe("https://topps.drey.dev/c/9");
+    expect(decodeUri(back[0])).toBe("https://example.com/c/9");
     expect(decodeText(back[1])).toEqual({ text: "hi", lang: "en-US", encoding: "utf-16" });
     expect(new TextDecoder().decode(back[2].payload)).toBe("{}");
   });

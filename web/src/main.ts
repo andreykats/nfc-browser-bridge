@@ -16,7 +16,7 @@ interface CardView {
   note?: string;
 }
 const views = new Map<string, CardView>();
-const entries: Entry[] = [{ kind: "uri", uri: "https://topps.drey.dev/" }];
+const entries: Entry[] = [{ kind: "uri", uri: "https://example.com/" }];
 
 // ---- log ----
 

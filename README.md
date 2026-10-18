@@ -84,11 +84,11 @@ on older versions):
 - **Windows** (registry, per machine):
   ```
   HKLM\SOFTWARE\Policies\Google\Chrome\LoopbackNetworkAllowedForUrls
-    1 = "https://topps.drey.dev"
+    1 = "https://example.com"
   ```
 - **macOS:** a configuration profile for the `com.google.Chrome` domain with
   `LoopbackNetworkAllowedForUrls` set to an array containing
-  `https://topps.drey.dev`.
+  `https://example.com`.
 
 Pages on `http://localhost` never see the prompt, so test the real flow on the
 published site.

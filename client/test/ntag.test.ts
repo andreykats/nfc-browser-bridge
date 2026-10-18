@@ -78,7 +78,7 @@ describe("readNdef", () => {
   });
 
   it("reads only the pages it needs, in at most two batches", async () => {
-    const records = [uriRecord("https://topps.drey.dev/c/1"), textRecord("x".repeat(100))];
+    const records = [uriRecord("https://example.com/c/1"), textRecord("x".repeat(100))];
     const tag = place(FakeTag.ntag("NTAG216").withNdef(records));
     const requests: number[] = [];
     const orig = client.transmit.bind(client);
@@ -103,8 +103,8 @@ describe("writeNdef", () => {
   it.each(["NTAG213", "NTAG215", "NTAG216"] as NtagKind[])("round-trips a multi-record message on %s", async (kind) => {
     const tag = place(FakeTag.ntag(kind));
     const records: NdefRecord[] = [
-      uriRecord("https://topps.drey.dev/card/123"),
-      textRecord("Topps card", "en"),
+      uriRecord("https://example.com/card/123"),
+      textRecord("Example card", "en"),
       mimeRecord("application/json", '{"id":123}'),
     ];
     const res = await writeNdef(client, R, tag.atr, records);
@@ -164,7 +164,7 @@ describe("writeNdef", () => {
   it("falls back to the ACR1552 transparent session when FF D6 fails", async () => {
     const tag = place(FakeTag.ntag("NTAG215"));
     fake.failNextWrites(1);
-    const records = [uriRecord("https://topps.drey.dev/x"), textRecord("fallback")];
+    const records = [uriRecord("https://example.com/x"), textRecord("fallback")];
     const res = await writeNdef(client, R, tag.atr, records);
     expect(res.usedTransparentSession).toBe(true);
     expect(fake.apduLog.some((a) => a.startsWith("FFC2000102") || a.startsWith("FFC20001"))).toBe(true);
@@ -185,7 +185,7 @@ describe("writeNdef", () => {
 
   it("leaves an empty or valid tag when the card is lifted mid-write", async () => {
     const oldRecords = [textRecord("old content that is fairly long ".repeat(3))];
-    const newRecords = [uriRecord("https://topps.drey.dev/new"), textRecord("new ".repeat(60))];
+    const newRecords = [uriRecord("https://example.com/new"), textRecord("new ".repeat(60))];
     const oldMsg = toHex(encodeNdef(oldRecords));
     const newMsg = toHex(encodeNdef(newRecords));
     let sawEmpty = false;

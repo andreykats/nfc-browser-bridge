@@ -34,7 +34,7 @@ describe.skipIf(!env.BRIDGE_HW)("hardware", () => {
     console.log(`original: ${original.records.length} record(s), ${original.message.length} bytes`);
 
     try {
-      const records = [uriRecord("https://topps.drey.dev/hw-test"), textRecord("Grüße", "de", "utf-16"), mimeRecord("application/json", '{"hw":1}')];
+      const records = [uriRecord("https://example.com/hw-test"), textRecord("Grüße", "de", "utf-16"), mimeRecord("application/json", '{"hw":1}')];
       let t = performance.now();
       const w = await writeNdef(client, card.reader, card.atr, records);
       console.log(`multi-record write: ${w.pagesWritten} pages in ${Math.round(performance.now() - t)} ms, transparent=${w.usedTransparentSession}`);

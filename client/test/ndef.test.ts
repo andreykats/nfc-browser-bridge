@@ -29,15 +29,15 @@ describe("NDEF records", () => {
       const [r] = roundTrip([uriRecord(uri)]);
       expect(decodeUri(r)).toBe(uri);
     }
-    expect(uriRecord("https://www.topps.com").payload[0]).toBe(0x02);
-    expect(uriRecord("https://topps.drey.dev/c/1").payload[0]).toBe(0x04);
+    expect(uriRecord("https://www.example.com").payload[0]).toBe(0x02);
+    expect(uriRecord("https://example.com/c/1").payload[0]).toBe(0x04);
     expect(uriRecord("urn:epc:id:sgtin:1").payload[0]).toBe(0x1e);
     expect(uriRecord("custom:thing").payload[0]).toBe(0x00);
   });
 
   it("encodes a known URI record byte-for-byte", () => {
-    // D1 01 0B 55 04 "topps.com/x" … well-known, SR, MB+ME
-    expect(toHex(encodeNdef([uriRecord("https://topps.com/x")]))).toBe("D1010C5504" + toHex(bytes("topps.com/x")));
+    // D1 01 0E 55 04 "example.com/x" … well-known, SR, MB+ME
+    expect(toHex(encodeNdef([uriRecord("https://example.com/x")]))).toBe("D1010E5504" + toHex(bytes("example.com/x")));
   });
 
   it("treats RFU URI prefix codes as no prefix", () => {
@@ -66,7 +66,7 @@ describe("NDEF records", () => {
   it("round-trips every TNF, ids, and long records in a multi-record message", () => {
     const long = new Uint8Array(70_000).map((_, i) => i & 0xff);
     const records = [
-      uriRecord("https://topps.drey.dev/card/42", bytes("id1")),
+      uriRecord("https://example.com/card/42", bytes("id1")),
       textRecord("hello", "en"),
       mimeRecord("application/json", '{"a":1}'),
       mimeRecord("application/octet-stream", long),
@@ -116,8 +116,8 @@ describe("NDEF records", () => {
 
 describe("matchKey", () => {
   it("prefers the first URI record, expanded", () => {
-    expect(matchKey([textRecord("t"), uriRecord("https://topps.drey.dev/c/1"), uriRecord("https://x")])).toBe(
-      "https://topps.drey.dev/c/1",
+    expect(matchKey([textRecord("t"), uriRecord("https://example.com/c/1"), uriRecord("https://x")])).toBe(
+      "https://example.com/c/1",
     );
   });
   it("falls back to the first Text record without its language", () => {

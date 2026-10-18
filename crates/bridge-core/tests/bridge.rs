@@ -50,7 +50,7 @@ async fn connect_with(
             .insert("host", HeaderValue::from_str(h).unwrap());
     }
     req.headers_mut()
-        .insert("origin", HeaderValue::from_static("https://topps.drey.dev"));
+        .insert("origin", HeaderValue::from_static("https://example.com"));
     tokio_tungstenite::connect_async(req)
         .await
         .map(|(ws, _)| ws)

@@ -149,7 +149,7 @@ mod tests {
                 server: ServerState::Listening { port: DEFAULT_PORT },
                 service: ServiceStatus::Ready,
                 readers,
-                clients: vec!["topps.drey.dev".into()],
+                clients: vec!["example.com".into()],
             }),
             ..Default::default()
         }
@@ -177,7 +177,7 @@ mod tests {
             m.readers,
             vec!["ACS ACR1552 1S CL Reader PICC 0 — card 04699E22…"]
         );
-        assert_eq!(m.clients, "Clients: topps.drey.dev");
+        assert_eq!(m.clients, "Clients: example.com");
         assert_eq!(m.icon, IconState::CardPresent);
     }
 

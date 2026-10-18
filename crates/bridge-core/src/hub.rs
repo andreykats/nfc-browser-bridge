@@ -22,7 +22,7 @@ pub struct BridgeStatus {
     pub server: ServerState,
     pub service: ServiceStatus,
     pub readers: Vec<Reader>,
-    /// Distinct origins of connected clients ("topps.drey.dev", "localhost:5173", "local app").
+    /// Distinct origins of connected clients ("example.com", "localhost:5173", "local app").
     pub clients: Vec<String>,
 }
 
