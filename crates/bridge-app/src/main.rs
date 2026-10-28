@@ -3,6 +3,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod autostart;
+mod http;
 mod instance;
 mod logging;
 mod menu;
@@ -10,6 +11,7 @@ mod menu;
 mod oslog;
 mod supervisor;
 mod update;
+mod upload;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -26,6 +28,7 @@ use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 use bridge_app::icons::{self, IconState};
 use menu::{AppState, MenuModel};
 use update::UpdateInfo;
+use upload::{UploadError, Uploaded};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// macOS menu-bar icons are template images, tinted by the system for light/dark menu bars.
@@ -40,6 +43,7 @@ enum UserEvent {
     Status(BridgeStatus),
     Menu(MenuEvent),
     Update(UpdateInfo),
+    Uploaded(Result<Uploaded, UploadError>),
     RetryBind,
 }
 
@@ -151,6 +155,22 @@ impl App {
             menu::ID_LOGS => {
                 if let Some(dir) = logging::log_dir() {
                     open(&dir.to_string_lossy());
+                }
+            }
+            menu::ID_UPLOAD if !self.state.uploading => {
+                let proxy = Mutex::new(self.proxy.clone());
+                let spawned = upload::spawn(VERSION, move |r| {
+                    let _ = proxy
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .send_event(UserEvent::Uploaded(r));
+                });
+                match spawned {
+                    Ok(()) => self.state.uploading = true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "cannot start uploading logs");
+                        dialog("Upload logs", &format!("Could not upload the logs: {e}"));
+                    }
                 }
             }
             menu::ID_UPDATE => {
@@ -310,6 +330,20 @@ fn main() {
             Event::UserEvent(UserEvent::Update(u)) => {
                 app.state.update = Some(u);
                 app.refresh();
+            }
+            Event::UserEvent(UserEvent::Uploaded(r)) => {
+                app.state.uploading = false;
+                app.refresh();
+                match r {
+                    Ok(u) => {
+                        tracing::info!(folder = %u.folder, files = u.files, "logs uploaded");
+                        dialog("Upload logs", &format!("Uploaded {} log files to:\n{}", u.files, u.folder));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "cannot upload logs");
+                        dialog("Upload logs", &format!("Could not upload the logs: {e}"));
+                    }
+                }
             }
             Event::UserEvent(UserEvent::RetryBind) => {
                 if app.bridge.is_none() && !app.start_bridge() {

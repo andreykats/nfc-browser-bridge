@@ -1,0 +1,19 @@
+rules_version = '2';
+
+// "Upload logs" in the tray menu (crates/bridge-app/src/upload.rs). The app has no credentials, so
+// anyone can call this: it may only add new log files under nfc-browser-bridge/. Nothing can be
+// read, listed, overwritten or deleted; view uploads in the Firebase console.
+service firebase.storage {
+  match /b/{bucket}/o {
+    // nfc-browser-bridge/<host>/<UTC time>_v<version>/<bridge|macos>.<date>.log
+    match /nfc-browser-bridge/{host}/{upload}/{file} {
+      // Uploading over an existing file is a `create` too; `resource == null` refuses it.
+      allow create: if resource == null
+        && host.matches('[A-Za-z0-9-]{1,63}')
+        && upload.matches('[0-9]{8}T[0-9]{6}Z_v[0-9A-Za-z.+-]{1,32}')
+        && file.matches('(bridge|macos)[.][0-9]{4}-[0-9]{2}-[0-9]{2}[.]log')
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType == 'text/plain';
+    }
+  }
+}

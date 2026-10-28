@@ -113,6 +113,12 @@ the websites currently connected.
   - `macos.*.log` (macOS): a copy of the system log's lines about USB, the
     smart-card service and sleep/wake. macOS itself keeps them only for a day
     or two.
+- **Sending logs:** tray menu → **Upload logs** copies all of the above to the
+  "Logs" Firebase project and shows where they went, e.g.
+  `nfc-browser-bridge/Kiosk-Mac-mini/20261028T180000Z_v1.0.7`. Find that
+  folder under Storage in the
+  [Firebase console](https://console.firebase.google.com/project/logs-wvmye/storage).
+  The app can only add files there; it cannot read, change or delete any.
 - **Reader plugged in but not working:** on macOS the bridge resets a reader
   that is on USB but not listed by the smart-card service, or whose card stops
   answering, as if it had been replugged (see
@@ -150,6 +156,11 @@ Actions tab. Each run is numbered automatically as the next `v1.0.N` (the
 series comes from the workspace version in `Cargo.toml`; never create `v*` tags
 by hand); the test site is published to GitHub Pages by
 [`pages.yml`](.github/workflows/pages.yml).
+
+The log upload bucket's rules are in [`firebase/storage.rules`](firebase/storage.rules)
+(deploy with `cd firebase && npx firebase-tools deploy --only storage`); its
+90-day auto-delete is [`firebase/lifecycle.json`](firebase/lifecycle.json)
+(`gcloud storage buckets update gs://logs-wvmye.firebasestorage.app --lifecycle-file=firebase/lifecycle.json`).
 
 ## License
 
