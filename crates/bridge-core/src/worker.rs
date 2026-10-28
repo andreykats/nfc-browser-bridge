@@ -16,6 +16,7 @@ use crate::backend::{Disposition, PcscBackend, PcscCard, PcscContext, PcscError}
 use crate::health::{Health, Part};
 use crate::hub::Hub;
 use crate::protocol::{ApduResponse, BridgeError, ErrorCode, encode_hex};
+use crate::recovery::Recovery;
 
 pub type Reply<T> = oneshot::Sender<Result<T, BridgeError>>;
 
@@ -34,6 +35,10 @@ pub enum Job {
     },
     /// The card left (or the reader went away): drop the held handle.
     Release { reader: String },
+    /// Check that the card held on `reader` still answers; reset it if not.
+    Probe { reader: String },
+    /// Drop the PC/SC context; the next job establishes a new one.
+    Reopen,
 }
 
 const QUEUE: usize = 64;
@@ -70,6 +75,7 @@ pub fn spawn<B: PcscBackend>(
     backend: Arc<B>,
     hub: Arc<Hub>,
     health: Arc<Health>,
+    recovery: Arc<Recovery>,
 ) -> (WorkerHandle, JoinHandle<()>) {
     let (tx, rx) = sync_channel(QUEUE);
     let thread = std::thread::Builder::new()
@@ -79,6 +85,7 @@ pub fn spawn<B: PcscBackend>(
                 backend,
                 hub,
                 health,
+                recovery,
                 ctx: None,
                 held: HashMap::new(),
             }
@@ -92,6 +99,7 @@ struct Worker<B: PcscBackend> {
     backend: Arc<B>,
     hub: Arc<Hub>,
     health: Arc<Health>,
+    recovery: Arc<Recovery>,
     ctx: Option<B::Context>,
     /// Idle handles keeping present cards powered, by reader.
     held: HashMap<String, <B::Context as PcscContext>::Card>,
@@ -111,6 +119,7 @@ impl<B: PcscBackend> Worker<B> {
                 match self.identify(&reader) {
                     Ok(uid) => {
                         self.hold(&reader);
+                        self.recovery.card_ok(&reader);
                         self.hub.card_identified(&reader, generation, uid);
                     }
                     // Gone already, or the service died: the monitor will clean up.
@@ -134,6 +143,11 @@ impl<B: PcscBackend> Worker<B> {
                 reply,
             } => {
                 let _ = reply.send(self.transmit(&reader, &apdus, stop_on_error));
+            }
+            Job::Probe { reader } => self.probe(&reader),
+            Job::Reopen => {
+                tracing::debug!("dropping the PC/SC context");
+                self.drop_context();
             }
             Job::Reset { reader, reply } => {
                 let result = self.with_card(&reader, |card| {
@@ -161,6 +175,43 @@ impl<B: PcscBackend> Worker<B> {
             }
         }
         result
+    }
+
+    /// Check that the card on `reader` answers. If not, reset it (power it off and on) and check
+    /// again; a card that still does not answer is reported to recovery.
+    fn probe(&mut self, reader: &str) {
+        if !self.hub.has_card(reader) {
+            return;
+        }
+        let e = match self.with_card(reader, read_uid) {
+            Ok(_) => {
+                self.recovery.card_ok(reader);
+                return;
+            }
+            // Gone, or the service died: the monitor deals with it.
+            Err(e) if is_card_gone(e) || e.is_service_lost() => return,
+            Err(e) => e,
+        };
+        tracing::warn!(%reader, pcsc = %e, "the card on the reader stopped answering; resetting it");
+        // The held handle belongs to the card before the reset.
+        if let Some(card) = self.held.remove(reader) {
+            let _ = card.disconnect(Disposition::LeaveCard);
+        }
+        let retried = self
+            .with_card(reader, |card| card.reconnect_reset())
+            .and_then(|_| self.with_card(reader, read_uid));
+        self.hold(reader);
+        match retried {
+            Ok(_) => {
+                tracing::info!(%reader, "the card answers again after a reset");
+                self.recovery.card_ok(reader);
+            }
+            Err(e) if is_card_gone(e) || e.is_service_lost() => {}
+            Err(e) => {
+                tracing::warn!(%reader, pcsc = %e, "the card still does not answer");
+                self.recovery.card_unresponsive(reader);
+            }
+        }
     }
 
     /// Keep an idle shared handle to the card on `reader` until `Job::Release`.

@@ -6,6 +6,8 @@ mod autostart;
 mod instance;
 mod logging;
 mod menu;
+#[cfg(target_os = "macos")]
+mod oslog;
 mod supervisor;
 mod update;
 
@@ -245,6 +247,10 @@ fn main() {
         supervisor::run();
     }
     tracing::info!(version = VERSION, "NFC Browser Bridge starting");
+    #[cfg(target_os = "macos")]
+    if let Some(dir) = logging::log_dir() {
+        oslog::spawn(&dir);
+    }
     autostart::refresh();
     #[cfg(target_os = "macos")]
     keep_out_of_app_nap();

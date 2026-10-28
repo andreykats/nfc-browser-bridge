@@ -1,9 +1,12 @@
 //! End-to-end tests: FakePcsc -> monitor/worker -> WebSocket server -> a real WebSocket client.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use bridge_core::backend::{Disposition, PcscError};
 use bridge_core::fake::{ATR_ULTRALIGHT, FakeCard, FakePcsc, FaultOp, NtagType};
+use bridge_core::recovery::RecoveryConfig;
+use bridge_core::usb::{NoUsb, UsbControl};
 use bridge_core::{Bridge, BridgeConfig};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -20,16 +23,32 @@ const UID_HEX: &str = "04699E22C01C90";
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
-fn start(fake: &FakePcsc) -> Bridge<FakePcsc> {
-    Bridge::start(
-        fake.clone(),
-        BridgeConfig {
-            port: 0,
-            version: "9.9.9".into(),
+/// Fast recovery timings; cards are checked only when `probe` is set.
+fn config(usb: Arc<dyn UsbControl>, probe: Option<Duration>) -> BridgeConfig {
+    BridgeConfig {
+        port: 0,
+        version: "9.9.9".into(),
+        recovery: RecoveryConfig {
+            usb,
+            tick: Duration::from_millis(20),
+            missing_grace: Duration::from_millis(100),
+            reopen_wait: Duration::from_millis(100),
+            reset_wait: Duration::from_millis(600),
+            max_resets: 2,
+            probe_interval: probe.unwrap_or(Duration::from_secs(3600)),
+            heartbeat: Duration::from_secs(3600),
         },
-        None,
-    )
-    .unwrap()
+    }
+}
+
+/// A bridge that cannot see USB (like on Windows).
+fn start(fake: &FakePcsc) -> Bridge<FakePcsc> {
+    Bridge::start(fake.clone(), config(Arc::new(NoUsb), None), None).unwrap()
+}
+
+/// A bridge that sees the fake's USB side (like on macOS).
+fn start_with_usb(fake: &FakePcsc, probe: Option<Duration>) -> Bridge<FakePcsc> {
+    Bridge::start(fake.clone(), config(Arc::new(fake.usb()), probe), None).unwrap()
 }
 
 async fn connect(bridge: &Bridge<FakePcsc>) -> Ws {
@@ -131,6 +150,8 @@ async fn hello_lists_existing_cards_without_a_tap() {
         hello["readers"],
         json!([{"name": R1, "kind": "picc", "card": {"uid": UID_HEX, "atr": ATR_ULTRALIGHT}}])
     );
+    // Without USB access there is nothing to say about USB or recovery.
+    assert!(hello.get("usbReaders").is_none() && hello.get("recovery").is_none());
     // No card_present follows for a card that was already there.
     let pong = request(&mut ws, json!({"id": 1, "type": "ping"})).await;
     assert_eq!(pong, json!({"id": 1, "ok": true, "result": {}}));
@@ -550,7 +571,7 @@ async fn port_in_use_is_reported() {
         fake.clone(),
         BridgeConfig {
             port,
-            version: "x".into(),
+            ..config(Arc::new(NoUsb), None)
         },
         None,
     );
@@ -700,5 +721,178 @@ async fn a_hung_card_call_is_reported_as_a_stall() {
     // It recovers on its own once the call returns.
     recv_until(&mut ws, |v| v["event"] == "card_present").await;
     assert_eq!(health.stalled(limit), None);
+    bridge.shutdown();
+}
+
+fn usb_names(v: &Value) -> Value {
+    v["usbReaders"].clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reports_usb_readers_and_recovery_state() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    let bridge = start_with_usb(&fake, None);
+    let ws = connect_ready(&bridge, |v| usb_names(v) == json!([{"name": R2}])).await;
+    drop(ws);
+    let mut ws = connect(&bridge).await;
+    let hello = recv(&mut ws).await;
+    assert_eq!(hello["recovery"], "idle");
+    let r = request(&mut ws, json!({"id": 1, "type": "list_readers"})).await;
+    assert_eq!(r["result"]["usbReaders"], json!([{"name": R2}]));
+    assert_eq!(r["result"]["recovery"], "idle");
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reader_lost_by_pcsc_is_reset_over_usb() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    let bridge = start_with_usb(&fake, None);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R2) && v["recovery"] == "idle").await;
+
+    // Still on USB, but the smart-card service no longer lists it.
+    fake.lose_reader(R2);
+    let reopen = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(reopen["action"], "reopen");
+    assert_eq!(reopen["readers"], json!([R2]));
+    let reset = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(reset["action"], "usb_reset");
+    assert_eq!(reset["readers"], json!([R2]));
+    recv_until(&mut ws, |v| v["event"] == "readers" && has_reader(v, R2)).await;
+    let back = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(back["action"], "recovered");
+    recv_until(&mut ws, |v| {
+        v["event"] == "readers" && v["recovery"] == "idle"
+    })
+    .await;
+    assert_eq!(fake.usb_resets(), 1);
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_gives_up_after_two_resets_and_starts_over_on_replug() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    fake.set_usb_reset_broken(true);
+    let bridge = start_with_usb(&fake, None);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R2)).await;
+
+    fake.lose_reader(R2);
+    let mut actions = Vec::new();
+    loop {
+        let v = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+        actions.push(v["action"].as_str().unwrap().to_string());
+        if v["action"] == "failed" {
+            break;
+        }
+    }
+    assert_eq!(actions, ["reopen", "usb_reset", "usb_reset", "failed"]);
+    recv_until(&mut ws, |v| {
+        v["event"] == "readers" && v["recovery"] == "failed"
+    })
+    .await;
+    assert_eq!(fake.usb_resets(), 2);
+
+    // Unplugged and plugged back in by hand: the reader is listed again.
+    fake.set_usb_reset_broken(false);
+    fake.remove_reader(R2);
+    fake.add_reader(R2);
+    let back = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(back["action"], "recovered");
+    recv_until(&mut ws, |v| {
+        v["event"] == "readers" && v["recovery"] == "idle"
+    })
+    .await;
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unresponsive_card_is_reset_over_usb_without_a_new_tap() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    fake.insert_card(R2, FakeCard::ntag(NtagType::Ntag215, UID));
+    let bridge = start_with_usb(&fake, Some(Duration::from_millis(100)));
+    let mut ws = connect_ready(&bridge, |v| reader_has_card(v, R2)).await;
+
+    fake.make_unresponsive(R2);
+    let reset = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(reset["action"], "usb_reset");
+    assert_eq!(reset["readers"], json!([R2]));
+    // The reader goes away and comes back with the card still on it: no card_present.
+    assert_eq!(
+        recv_until(&mut ws, |v| v["event"] == "card_removed").await,
+        json!({"event": "card_removed", "reader": R2})
+    );
+    let (mut card_back, mut recovered) = (false, false);
+    while !(card_back && recovered) {
+        let v = recv(&mut ws).await;
+        assert_ne!(v["event"], "card_present", "the card was announced again");
+        card_back |= v["event"] == "readers" && reader_has_card(&v, R2);
+        recovered |= v["event"] == "recovery" && v["action"] == "recovered";
+    }
+    // And the card answers again.
+    let r = request(
+        &mut ws,
+        json!({"id": 1, "type": "transmit", "reader": R2, "apdus": ["FFCA000000"]}),
+    )
+    .await;
+    assert_eq!(
+        r["result"]["responses"],
+        json!([{"data": UID_HEX, "sw": "9000"}])
+    );
+    // Lifting the card and tapping it again is a new tap as usual.
+    fake.remove_card(R2);
+    recv_until(&mut ws, |v| v["event"] == "card_removed").await;
+    fake.insert_card(R2, FakeCard::ntag(NtagType::Ntag215, UID));
+    recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reset_readers_resets_every_usb_reader() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    let bridge = start_with_usb(&fake, None);
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R2)).await;
+    ws.send(Message::text(
+        json!({"id": 1, "type": "reset_readers"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    let (mut response, mut event) = (None, None);
+    while response.is_none() || event.is_none() {
+        let v = recv(&mut ws).await;
+        if v["id"] == 1 {
+            response = Some(v);
+        } else if v["event"] == "recovery" {
+            event = Some(v);
+        }
+    }
+    assert_eq!(
+        response.unwrap(),
+        json!({"id": 1, "ok": true, "result": {"reset": [R2]}})
+    );
+    let event = event.unwrap();
+    assert_eq!(event["action"], "usb_reset");
+    assert_eq!(event["reason"], "requested by a client");
+    assert_eq!(fake.usb_resets(), 1);
+    // The reader comes back by itself; recovery does not step in.
+    recv_until(&mut ws, |v| v["event"] == "readers" && has_reader(v, R2)).await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(fake.usb_resets(), 1);
+    bridge.shutdown();
+
+    // Without USB access the request is refused.
+    let fake = FakePcsc::new();
+    let bridge = start(&fake);
+    let mut ws = connect_ready(&bridge, |v| v["service"] == "ready").await;
+    let r = request(&mut ws, json!({"id": 2, "type": "reset_readers"})).await;
+    assert_eq!(r["error"]["code"], "unsupported");
     bridge.shutdown();
 }

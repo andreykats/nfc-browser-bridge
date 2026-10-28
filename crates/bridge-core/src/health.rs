@@ -12,6 +12,8 @@ pub enum Part {
     Monitor,
     /// The thread that runs card I/O jobs.
     Worker,
+    /// USB calls of reader recovery.
+    Recovery,
 }
 
 impl fmt::Display for Part {
@@ -19,6 +21,7 @@ impl fmt::Display for Part {
         f.write_str(match self {
             Self::Monitor => "monitor",
             Self::Worker => "worker",
+            Self::Recovery => "reader recovery",
         })
     }
 }
@@ -41,6 +44,7 @@ impl fmt::Display for Stall {
 pub struct Health {
     monitor: Mutex<Option<Instant>>,
     worker: Mutex<Option<Instant>>,
+    recovery: Mutex<Option<Instant>>,
 }
 
 impl Health {
@@ -48,6 +52,7 @@ impl Health {
         match part {
             Part::Monitor => &self.monitor,
             Part::Worker => &self.worker,
+            Part::Recovery => &self.recovery,
         }
     }
 
@@ -69,11 +74,13 @@ impl Health {
     }
 
     fn stalled_at(&self, now: Instant, limit: Duration) -> Option<Stall> {
-        [Part::Monitor, Part::Worker].into_iter().find_map(|part| {
-            let since = (*self.slot(part).lock().unwrap_or_else(|e| e.into_inner()))?;
-            let busy_for = now.saturating_duration_since(since);
-            (busy_for > limit).then_some(Stall { part, busy_for })
-        })
+        [Part::Monitor, Part::Worker, Part::Recovery]
+            .into_iter()
+            .find_map(|part| {
+                let since = (*self.slot(part).lock().unwrap_or_else(|e| e.into_inner()))?;
+                let busy_for = now.saturating_duration_since(since);
+                (busy_for > limit).then_some(Stall { part, busy_for })
+            })
     }
 }
 

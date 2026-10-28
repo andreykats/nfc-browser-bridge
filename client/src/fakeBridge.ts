@@ -5,7 +5,17 @@
 import type { WebSocketFactory, WebSocketLike } from "./client.js";
 import { encodeNdef, type NdefRecord } from "./ndef.js";
 import { fromHex, toHex } from "./ntag.js";
-import { LIMITS, PROTOCOL_VERSION, type ErrorBody, type Reader, type ReaderKind, type ServerEvent } from "./protocol.js";
+import {
+  LIMITS,
+  PROTOCOL_VERSION,
+  type ErrorBody,
+  type Reader,
+  type ReaderKind,
+  type ReaderStatus,
+  type RecoveryAction,
+  type RecoveryState,
+  type ServerEvent,
+} from "./protocol.js";
 import { encodeNdefTlv } from "./tlv.js";
 
 export type NtagKind = "NTAG213" | "NTAG215" | "NTAG216";
@@ -82,6 +92,8 @@ export class FakeBridge {
   readonly apduLog: string[] = [];
   /** If set, requests are never answered (timeout tests). */
   silent = false;
+  /** `reset_readers` requests answered so far. */
+  readerResets = 0;
   readonly WebSocket: WebSocketFactory;
 
   private readonly readers: FakeReader[] = [];
@@ -89,6 +101,9 @@ export class FakeBridge {
   private failWrites = 0;
   private failWriteSw = "6300";
   private removeAfter: number | null = null;
+  /** Readers on USB; null like a bridge that cannot see USB (not macOS). */
+  private usb: string[] | null = null;
+  private recovery: RecoveryState = "idle";
 
   constructor() {
     const bridge = this;
@@ -147,6 +162,22 @@ export class FakeBridge {
     this.removeAfter = n;
   }
 
+  /** Readers on USB, as a macOS bridge reports them; null for a bridge that cannot see USB. */
+  setUsbReaders(names: string[] | null): void {
+    this.usb = names;
+    this.broadcastReaders();
+  }
+
+  setRecovery(state: RecoveryState): void {
+    this.recovery = state;
+    this.broadcastReaders();
+  }
+
+  /** Report a recovery step, as the bridge does when it brings a stuck reader back. */
+  recoveryStep(action: RecoveryAction, reason: string, readers: string[] = this.usb ?? []): void {
+    this.broadcast({ event: "recovery", action, reason, readers });
+  }
+
   /** Simulate quitting the bridge: drop all connections and refuse new ones. */
   stop(): void {
     this.running = false;
@@ -182,8 +213,17 @@ export class FakeBridge {
     for (const s of this.sockets) s.deliver(ev);
   }
 
+  private status(): ReaderStatus {
+    const s: ReaderStatus = { service: "ready", readers: this.publicReaders() };
+    if (this.usb) {
+      s.usbReaders = this.usb.map((name) => ({ name }));
+      s.recovery = this.recovery;
+    }
+    return s;
+  }
+
   private broadcastReaders(): void {
-    this.broadcast({ event: "readers", service: "ready", readers: this.publicReaders() });
+    this.broadcast({ event: "readers", ...this.status() });
   }
 
   /** @internal */
@@ -194,8 +234,7 @@ export class FakeBridge {
       protocol: PROTOCOL_VERSION,
       app: "nfc-browser-bridge",
       version: this.version,
-      service: "ready",
-      readers: this.publicReaders(),
+      ...this.status(),
     });
   }
 
@@ -231,7 +270,13 @@ export class FakeBridge {
       case "ping":
         return {};
       case "list_readers":
-        return { service: "ready", readers: this.publicReaders() };
+        return this.status();
+      case "reset_readers": {
+        const usb = this.usb ?? fail("unsupported", "The bridge cannot reset readers on this platform");
+        this.readerResets++;
+        this.recoveryStep("usb_reset", "requested by a client", usb);
+        return { reset: usb };
+      }
       case "reset": {
         const r = this.readers.find((x) => x.name === req.reader) ?? fail("no_such_reader", "No such reader");
         const tag = r.tag ?? fail("no_card", "No card on reader");

@@ -16,3 +16,10 @@ tracing = "0.1"
 [dev-dependencies]
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSError", "NSString"] }
+objc2-io-kit = { version = "0.3", default-features = false, features = ["std", "libc"] }
+objc2-io-usb-host = { version = "0.3", default-features = false, features = ["std", "block2", "dispatch2", "objc2-io-kit", "objc2-core-foundation", "IOUSBHostDefinitions", "IOUSBHostDevice", "IOUSBHostObject"] }

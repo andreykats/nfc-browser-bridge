@@ -1,7 +1,8 @@
 //! A scriptable in-memory PC/SC for tests: readers come and go, cards answer FF CA / FF B0 / FF D6
-//! from an NTAG memory image, and failures can be injected.
+//! from an NTAG memory image, and failures can be injected. `FakeUsb` adds the readers' USB side:
+//! a reader can stay on USB while PC/SC loses it, and a USB reset brings it back.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -9,6 +10,10 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     Disposition, PcscBackend, PcscCard, PcscContext, PcscError, ReaderWatch, Transmit, state,
 };
+use crate::usb::{UsbControl, UsbReader};
+
+/// How long a fake reader is gone from PC/SC after a USB reset.
+const USB_RESET_GAP: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NtagType {
@@ -150,6 +155,17 @@ struct World {
     resets: u32,
     connects: u32,
     open_handles: std::collections::HashMap<String, u32>,
+    /// USB devices (named like their PC/SC reader) and their attachment ids.
+    usb: Vec<(String, u64)>,
+    next_usb_id: u64,
+    usb_resets: u32,
+    /// Readers on USB that PC/SC does not list, and when a USB reset brings them back (`None`:
+    /// only a reset does).
+    lost: Vec<(FakeReader, Option<Instant>)>,
+    /// Readers whose cards answer every command with COMM_ERROR until a USB reset.
+    unresponsive: HashSet<String>,
+    /// USB resets change the id but bring nothing back.
+    usb_reset_broken: bool,
 }
 
 impl World {
@@ -176,6 +192,21 @@ impl World {
 
     fn reader(&mut self, name: &str) -> Option<&mut FakeReader> {
         self.readers.iter_mut().find(|r| r.name == name)
+    }
+
+    /// Bring back readers whose USB reset has finished.
+    fn restore_reset_readers(&mut self) {
+        let now = Instant::now();
+        let (back, still): (Vec<_>, Vec<_>) = std::mem::take(&mut self.lost)
+            .into_iter()
+            .partition(|(_, at)| at.is_some_and(|t| t <= now));
+        self.lost = still;
+        for (mut r, _) in back {
+            // Re-enumerated: a card on it is a fresh placement as far as PC/SC knows.
+            r.events += 1;
+            self.readers.push(r);
+            self.reader_events += 1;
+        }
     }
 }
 
@@ -314,6 +345,102 @@ impl FakePcsc {
     pub fn open_handles(&self, reader: &str) -> u32 {
         self.lock().open_handles.get(reader).copied().unwrap_or(0)
     }
+
+    /// Put `reader` on USB as well (see `usb`).
+    pub fn plug_usb(&self, reader: &str) {
+        self.changed(|w| {
+            w.next_usb_id += 1;
+            let id = w.next_usb_id;
+            w.usb.push((reader.into(), id));
+        });
+    }
+
+    /// PC/SC stops listing `reader` although it stays on USB, until a USB reset.
+    pub fn lose_reader(&self, reader: &str) {
+        self.changed(|w| {
+            let i = w
+                .readers
+                .iter()
+                .position(|r| r.name == reader)
+                .expect("no such fake reader");
+            let r = w.readers.remove(i);
+            w.lost.push((r, None));
+            w.reader_events += 1;
+        });
+    }
+
+    /// Cards on `reader` stop answering (COMM_ERROR) until a USB reset.
+    pub fn make_unresponsive(&self, reader: &str) {
+        self.changed(|w| {
+            w.unresponsive.insert(reader.into());
+        });
+    }
+
+    /// USB resets stop (or start again) bringing readers back.
+    pub fn set_usb_reset_broken(&self, broken: bool) {
+        self.changed(|w| w.usb_reset_broken = broken);
+    }
+
+    pub fn usb_resets(&self) -> u32 {
+        self.lock().usb_resets
+    }
+
+    /// The USB side of this fake.
+    pub fn usb(&self) -> FakeUsb {
+        FakeUsb {
+            world: self.world.clone(),
+        }
+    }
+}
+
+/// `UsbControl` over a `FakePcsc` world. A reset gives the device a new id, hides its reader from
+/// PC/SC for a moment, then lists it again (with any card on it) and clears `make_unresponsive`.
+#[derive(Clone)]
+pub struct FakeUsb {
+    world: Shared,
+}
+
+impl UsbControl for FakeUsb {
+    fn readers(&self) -> Option<Vec<UsbReader>> {
+        let w = self.world.0.lock().unwrap();
+        Some(
+            w.usb
+                .iter()
+                .map(|(name, id)| UsbReader {
+                    name: name.clone(),
+                    id: *id,
+                })
+                .collect(),
+        )
+    }
+
+    fn reset(&self, reader: &UsbReader) -> Result<(), String> {
+        {
+            let mut guard = self.world.0.lock().unwrap();
+            let w = &mut *guard;
+            let Some(dev) = w.usb.iter_mut().find(|(_, id)| *id == reader.id) else {
+                return Err("the reader is no longer on USB".into());
+            };
+            w.next_usb_id += 1;
+            dev.1 = w.next_usb_id;
+            let name = dev.0.clone();
+            w.usb_resets += 1;
+            if w.usb_reset_broken {
+                return Ok(());
+            }
+            w.unresponsive.remove(&name);
+            let back = Some(Instant::now() + USB_RESET_GAP);
+            if let Some(lost) = w.lost.iter_mut().find(|(r, _)| r.name == name) {
+                lost.1 = back;
+            } else if let Some(i) = w.readers.iter().position(|r| r.name == name) {
+                let r = w.readers.remove(i);
+                w.lost.push((r, back));
+                w.reader_events += 1;
+            }
+        }
+        self.world.1.notify_all();
+        Ok(())
+    }
 }
 
 impl PcscBackend for FakePcsc {
@@ -353,6 +480,7 @@ impl PcscContext for FakeContext {
         let mut w = self.lock();
         w.take_fault(FaultOp::ListReaders)?;
         w.check_epoch(self.epoch)?;
+        w.restore_reset_readers();
         Ok(w.readers.iter().map(|r| r.name.clone()).collect())
     }
 
@@ -369,6 +497,7 @@ impl PcscContext for FakeContext {
             }
             w.take_fault(FaultOp::GetStatusChange)?;
             w.check_epoch(self.epoch)?;
+            w.restore_reset_readers();
 
             let mut any = false;
             for watch in readers.iter_mut() {
@@ -399,7 +528,18 @@ impl PcscContext for FakeContext {
             if now >= deadline {
                 return Err(PcscError::TIMEOUT);
             }
-            w = self.world.1.wait_timeout(w, deadline - now).unwrap().0;
+            // Wake up when a reset reader comes back, as PnP would.
+            let wake = w
+                .lost
+                .iter()
+                .filter_map(|(_, at)| *at)
+                .fold(deadline, Instant::min);
+            w = self
+                .world
+                .1
+                .wait_timeout(w, wake.saturating_duration_since(now))
+                .unwrap()
+                .0;
         }
     }
 
@@ -476,6 +616,9 @@ impl Transmit for FakeHandle {
         }
         self.with_card(|w, idx| {
             w.take_fault(FaultOp::Transmit)?;
+            if w.unresponsive.contains(&self.reader) {
+                return Err(PcscError::COMM_ERROR);
+            }
             w.apdu_log.push((self.reader.clone(), apdu.to_vec()));
             if let Some(o) = w
                 .sw_overrides

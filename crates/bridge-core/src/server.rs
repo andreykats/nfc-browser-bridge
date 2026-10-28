@@ -25,6 +25,7 @@ use crate::protocol::{
     APP_NAME, BridgeError, ErrorCode, Event, MAX_IN_FLIGHT, MAX_MESSAGE_BYTES, PROTOCOL_VERSION,
     RequestBody, Response, WS_PATH, parse_request, validate_apdus,
 };
+use crate::recovery::Recovery;
 use crate::worker::{Job, WorkerHandle};
 
 const PING_INTERVAL: Duration = Duration::from_secs(30);
@@ -36,6 +37,7 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct ServerCtx {
     pub hub: Arc<Hub>,
     pub worker: WorkerHandle,
+    pub recovery: Arc<Recovery>,
     pub version: String,
     pub port: u16,
 }
@@ -128,13 +130,12 @@ async fn connection(stream: TcpStream, ctx: ServerCtx, mut shutdown: watch::Rece
 
     let client_id = ctx.hub.add_client(origin_label(origin.as_deref()));
     let (mut sink, mut stream) = ws.split();
-    let (service, readers, mut events) = ctx.hub.snapshot_and_subscribe();
+    let (status, mut events) = ctx.hub.snapshot_and_subscribe();
     let hello = Event::Hello {
         protocol: PROTOCOL_VERSION,
         app: APP_NAME.into(),
         version: ctx.version.clone(),
-        service,
-        readers,
+        status,
     };
 
     // Responses from request tasks.
@@ -243,14 +244,28 @@ fn handle_request(
         Err((id, e)) => return Some(Response::err(id, e)),
     };
     let id = req.id;
-    let (job, reply): (Job, ReplyFuture) = match req.body {
+    let (job, reply): (Option<Job>, ReplyFuture) = match req.body {
         RequestBody::Ping => return Some(Response::ok(id, json!({}))),
         RequestBody::ListReaders => {
-            let (service, readers) = ctx.hub.status_snapshot();
-            return Some(Response::ok(
-                id,
-                json!({ "service": service, "readers": readers }),
-            ));
+            let status = ctx.hub.status_snapshot();
+            return Some(Response::ok(id, json!(status)));
+        }
+        RequestBody::ResetReaders => {
+            let recovery = ctx.recovery.clone();
+            let reply = Box::pin(async move {
+                // USB resets block for a moment; keep them off the connection tasks.
+                tokio::task::spawn_blocking(move || recovery.reset_all("requested by a client"))
+                    .await
+                    // The task only fails to finish when the runtime shuts down.
+                    .unwrap_or_else(|_| {
+                        Err(BridgeError::new(
+                            ErrorCode::PcscUnavailable,
+                            "Bridge is shutting down",
+                        ))
+                    })
+                    .map(|reset| json!({ "reset": reset }))
+            });
+            (None, reply)
         }
         RequestBody::Transmit {
             reader,
@@ -272,12 +287,12 @@ fn handle_request(
                     .map(|responses| json!({ "responses": responses }))
             });
             (
-                Job::Transmit {
+                Some(Job::Transmit {
                     reader,
                     apdus,
                     stop_on_error,
                     reply: tx,
-                },
+                }),
                 reply,
             )
         }
@@ -288,7 +303,7 @@ fn handle_request(
             let (tx, rx) = oneshot::channel();
             let reply =
                 Box::pin(async move { received(rx).await.map(|atr| json!({ "atr": atr })) });
-            (Job::Reset { reader, reply: tx }, reply)
+            (Some(Job::Reset { reader, reply: tx }), reply)
         }
     };
 
@@ -299,7 +314,9 @@ fn handle_request(
             BridgeError::new(ErrorCode::Busy, "Too many requests in flight"),
         ));
     }
-    if let Err(e) = ctx.worker.submit(job) {
+    if let Some(job) = job
+        && let Err(e) = ctx.worker.submit(job)
+    {
         in_flight.fetch_sub(1, Ordering::SeqCst);
         return Some(Response::err(id, e));
     }
@@ -318,8 +335,7 @@ fn handle_request(
 }
 
 fn check_reader(ctx: &ServerCtx, reader: &str) -> Option<BridgeError> {
-    let (service, _) = ctx.hub.status_snapshot();
-    if service != crate::protocol::ServiceStatus::Ready {
+    if ctx.hub.status_snapshot().service != crate::protocol::ServiceStatus::Ready {
         return Some(BridgeError::new(
             ErrorCode::PcscUnavailable,
             "Smart card service unavailable",

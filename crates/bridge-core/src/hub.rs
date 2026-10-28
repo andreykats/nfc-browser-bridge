@@ -4,10 +4,14 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use tokio::sync::broadcast;
 
-use crate::protocol::{CardInfo, Event, Reader, ReaderKind, ServiceStatus};
+use crate::protocol::{
+    CardInfo, Event, Reader, ReaderKind, RecoveryAction, RecoveryState, ServiceStatus, Status,
+    UsbReaderInfo,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ServerState {
@@ -65,10 +69,22 @@ impl ReaderEntry {
     }
 }
 
+/// A card that was on a reader when the bridge reset that reader. If the same card shows up again
+/// on that reader before `until`, it never left: it is not announced again as a new tap.
+struct Returning {
+    reader: String,
+    uid: Option<String>,
+    until: Instant,
+}
+
 struct State {
     server: ServerState,
     service: ServiceStatus,
     readers: Vec<ReaderEntry>,
+    /// `None` where the bridge cannot see USB.
+    usb: Option<Vec<UsbReaderInfo>>,
+    recovery: RecoveryState,
+    returning: Vec<Returning>,
     clients: BTreeMap<u64, String>,
     next_client: u64,
     next_generation: u64,
@@ -91,6 +107,9 @@ impl Hub {
                 server: ServerState::Starting,
                 service: ServiceStatus::Unavailable,
                 readers: Vec::new(),
+                usb: None,
+                recovery: RecoveryState::Idle,
+                returning: Vec::new(),
                 clients: BTreeMap::new(),
                 next_client: 0,
                 next_generation: 0,
@@ -110,10 +129,7 @@ impl Hub {
     }
 
     fn emit_readers(&self, s: &State) {
-        self.emit(Event::Readers {
-            service: s.service,
-            readers: public_readers(s),
-        });
+        self.emit(Event::Readers(status(s)));
     }
 
     fn notify(&self, s: &State) {
@@ -130,21 +146,87 @@ impl Hub {
         }
     }
 
-    pub fn status_snapshot(&self) -> (ServiceStatus, Vec<Reader>) {
-        let s = self.lock();
-        (s.service, public_readers(&s))
+    pub fn status_snapshot(&self) -> Status {
+        status(&self.lock())
     }
 
     /// Current state plus a receiver for every event after it.
-    pub fn snapshot_and_subscribe(
-        &self,
-    ) -> (ServiceStatus, Vec<Reader>, broadcast::Receiver<Event>) {
+    pub fn snapshot_and_subscribe(&self) -> (Status, broadcast::Receiver<Event>) {
         let s = self.lock();
-        (s.service, public_readers(&s), self.events.subscribe())
+        (status(&s), self.events.subscribe())
     }
 
     pub fn has_reader(&self, name: &str) -> bool {
         self.lock().readers.iter().any(|r| r.name == name)
+    }
+
+    /// True if an announced card is on `reader`.
+    pub fn has_card(&self, reader: &str) -> bool {
+        self.lock()
+            .readers
+            .iter()
+            .any(|r| r.name == reader && matches!(r.slot, Slot::Announced { .. }))
+    }
+
+    /// Readers with an announced card on them.
+    pub fn readers_with_cards(&self) -> Vec<String> {
+        self.lock()
+            .readers
+            .iter()
+            .filter(|r| matches!(r.slot, Slot::Announced { .. }))
+            .map(|r| r.name.clone())
+            .collect()
+    }
+
+    pub fn client_count(&self) -> usize {
+        self.lock().clients.len()
+    }
+
+    /// The smart-card readers on USB (`None`: the bridge cannot see USB).
+    pub fn set_usb(&self, usb: Option<Vec<UsbReaderInfo>>) {
+        let mut s = self.lock();
+        if s.usb == usb {
+            return;
+        }
+        s.usb = usb;
+        self.emit_readers(&s);
+    }
+
+    pub fn set_recovery(&self, recovery: RecoveryState) {
+        let mut s = self.lock();
+        if s.recovery == recovery {
+            return;
+        }
+        s.recovery = recovery;
+        self.emit_readers(&s);
+    }
+
+    pub fn recovery_event(&self, action: RecoveryAction, reason: &str, readers: Vec<String>) {
+        self.emit(Event::Recovery {
+            action,
+            reason: reason.into(),
+            readers,
+        });
+    }
+
+    /// The bridge is about to reset the readers: cards on them now that come back on the same
+    /// reader before `until` are not announced again.
+    pub fn expect_return(&self, until: Instant) {
+        let mut s = self.lock();
+        let now = Instant::now();
+        let State {
+            readers, returning, ..
+        } = &mut *s;
+        returning.retain(|r| r.until > now);
+        for r in readers.iter() {
+            if let Slot::Announced { uid, .. } = &r.slot {
+                returning.push(Returning {
+                    reader: r.name.clone(),
+                    uid: uid.clone(),
+                    until,
+                });
+            }
+        }
     }
 
     pub fn set_server(&self, server: ServerState) {
@@ -240,16 +322,30 @@ impl Hub {
             return;
         }
         let atr = atr.clone();
-        tracing::info!(reader, uid = uid.as_deref().unwrap_or("-"), %atr, "card present");
         r.slot = Slot::Announced {
             uid: uid.clone(),
             atr: atr.clone(),
         };
-        self.emit(Event::CardPresent {
-            reader: reader.into(),
-            uid,
-            atr,
-        });
+        let now = Instant::now();
+        let returned = s
+            .returning
+            .iter()
+            .position(|x| x.reader == reader && x.uid == uid && x.until > now);
+        if let Some(i) = returned {
+            s.returning.remove(i);
+            tracing::info!(
+                reader,
+                uid = uid.as_deref().unwrap_or("-"),
+                "card still present after the reader reset; not announced again"
+            );
+        } else {
+            tracing::info!(reader, uid = uid.as_deref().unwrap_or("-"), %atr, "card present");
+            self.emit(Event::CardPresent {
+                reader: reader.into(),
+                uid,
+                atr,
+            });
+        }
         self.emit_readers(&s);
         self.notify(&s);
     }
@@ -296,4 +392,13 @@ impl Hub {
 
 fn public_readers(s: &State) -> Vec<Reader> {
     s.readers.iter().map(ReaderEntry::public).collect()
+}
+
+fn status(s: &State) -> Status {
+    Status {
+        service: s.service,
+        readers: public_readers(s),
+        usb_readers: s.usb.clone(),
+        recovery: s.usb.as_ref().map(|_| s.recovery),
+    }
 }

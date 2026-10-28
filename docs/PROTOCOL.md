@@ -57,6 +57,17 @@ type Reader = {
 `"unavailable"` otherwise (for example Windows stops the service when the last
 reader is unplugged). When it is `"unavailable"`, `readers` is empty.
 
+Where the bridge can see USB (macOS), `hello`, `readers` and `list_readers`
+also carry:
+
+```ts
+usbReaders: { name: string }[];                // smart-card readers on USB, listed or not
+recovery: "idle" | "recovering" | "failed";    // see "Reader recovery"
+```
+
+A reader in `usbReaders` but not in `readers` is plugged in but not working.
+Both fields are absent on other platforms; clients must not rely on them.
+
 ## Server events
 
 Events have an `event` field and no `id`.
@@ -82,6 +93,22 @@ or disappears, a card arrives or leaves, or the service status changes.
 {"event":"readers","service":"ready","readers":[...]}
 ```
 
+Where the bridge can see USB, `readers` is also sent when `usbReaders` or
+`recovery` changes.
+
+### `recovery`
+
+A step the bridge took to bring a stuck reader back (see "Reader recovery").
+Meant for logs; the outcome shows in `recovery` and the reader list.
+
+```json
+{"event":"recovery","action":"usb_reset","reason":"the reader is on USB but the smart card service does not list it (attempt 1 of 2)","readers":["ACS ACR1255U-J1"]}
+```
+
+`action` is `reopen` (reconnected to the smart-card service), `usb_reset`
+(reset readers over USB), `failed` (gave up) or `recovered`. `readers` names
+the readers concerned (USB names for `usb_reset`).
+
 ### `card_present`
 
 A card was placed on a reader and its UID has been read. Sent before the
@@ -99,6 +126,10 @@ A card was placed on a reader and its UID has been read. Sent before the
 
 `card_removed` is only sent for cards that were announced (by `card_present`
 or in `hello`/`readers`). A card is announced at most once per placement.
+
+When the bridge resets a reader (see "Reader recovery"), the reader leaves and
+comes back. A card still lying on it gets `card_removed`, then shows up again
+in `readers` **without** a `card_present`: it was never lifted.
 
 ## Requests
 
@@ -120,7 +151,8 @@ Result: `{}`.
 {"id":2,"type":"list_readers"}
 ```
 
-Result: `{"service":"ready","readers":[Reader]}`.
+Result: `{"service":"ready","readers":[Reader]}`, plus `usbReaders` and
+`recovery` where the bridge can see USB.
 
 ### `transmit`
 
@@ -158,6 +190,17 @@ completed before the failure. The card is then reset (disconnected with
 Reconnects to the card with `SCARD_RESET_CARD`. Use it to recover a reader
 that is stuck after a failed command. Result: `{"atr":"3B8F..."}`.
 
+### `reset_readers`
+
+```json
+{"id":5,"type":"reset_readers"}
+```
+
+Resets every smart-card reader on USB, the software equivalent of unplugging
+it and plugging it back in (the reader keeps its power). For a staff "reset
+reader" button. Result: `{"reset":["ACS ACR1255U-J1"]}`, the readers that were
+reset. Fails with `unsupported` where the bridge cannot see USB.
+
 ## Responses
 
 Success:
@@ -192,6 +235,7 @@ Failure:
 | `blocked_write`     | Write to pages 0–3 without `unsafe: true`                                  |
 | `pcsc_unavailable`  | The smart-card service is not running                                      |
 | `busy`              | Too many in-flight requests on this socket, or the bridge queue is full    |
+| `unsupported`       | The platform cannot do this (`reset_readers` without USB access)           |
 
 ## Write guard
 
@@ -208,3 +252,26 @@ Any website can connect to the bridge, so writes to NFC Forum Type 2 pages
   readers): blocked when `page` is below 4.
 
 This is a cheap safety net, not a security boundary.
+
+## Reader recovery
+
+Where the bridge can see USB (macOS), it watches for two kinds of trouble:
+
+- **Missing:** a smart-card reader is on USB, but the smart-card service lists
+  no usable reader (the kiosk would say "plug in the reader" while it is
+  plugged in).
+- **Unresponsive:** a card held on a reader stops answering. The bridge checks
+  held cards every 60 s; a card that fails is reset (powered off and on) first.
+
+A missing reader gets 5 s to show up (a replug takes about 1 s). Then the
+bridge reconnects to the smart-card service, and after 5 more seconds resets
+the reader over USB. An unresponsive card goes straight to the USB reset. If
+the reader still does not work 10 s after a reset, it is reset once more, and
+after that `recovery` becomes `"failed"`: the reader needs unplugging and
+plugging back in. Replugging it, or the reader coming back by itself, returns
+`recovery` to `"idle"`.
+
+`recovery` is `"recovering"` while the bridge reconnects or waits after a
+reset. Each step is reported with a `recovery` event.
+
+Kiosks with several readers: only "no usable reader at all" counts as missing.

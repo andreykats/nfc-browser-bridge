@@ -63,6 +63,52 @@ pub struct Reader {
     pub card: Option<CardInfo>,
 }
 
+/// A smart-card reader seen on USB, whether or not PC/SC lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UsbReaderInfo {
+    pub name: String,
+}
+
+/// Whether the bridge is bringing a stuck reader back (see docs/PROTOCOL.md, "Reader recovery").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RecoveryState {
+    Idle,
+    Recovering,
+    /// Recovery gave up: the reader needs unplugging and plugging back in.
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryAction {
+    /// Reconnected to the smart-card service.
+    Reopen,
+    /// Reset readers over USB (the software equivalent of replugging them).
+    UsbReset,
+    /// Gave up.
+    Failed,
+    /// The reader works again.
+    Recovered,
+}
+
+/// What `hello`, `readers` and `list_readers` report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Status {
+    pub service: ServiceStatus,
+    pub readers: Vec<Reader>,
+    /// Smart-card readers on USB. Only on platforms where the bridge can see USB (macOS).
+    #[serde(
+        rename = "usbReaders",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub usb_readers: Option<Vec<UsbReaderInfo>>,
+    /// Present whenever `usbReaders` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery: Option<RecoveryState>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
@@ -70,12 +116,17 @@ pub enum Event {
         protocol: u32,
         app: String,
         version: String,
-        service: ServiceStatus,
-        readers: Vec<Reader>,
+        #[serde(flatten)]
+        status: Status,
     },
-    Readers {
-        service: ServiceStatus,
-        readers: Vec<Reader>,
+    Readers(Status),
+    /// A step the bridge took to bring a stuck reader back. For logs; the outcome shows in
+    /// `recovery` and the reader list.
+    Recovery {
+        action: RecoveryAction,
+        reason: String,
+        /// The readers it concerns (USB names for `usb_reset`).
+        readers: Vec<String>,
     },
     CardPresent {
         reader: String,
@@ -103,6 +154,7 @@ pub enum RequestBody {
     Reset {
         reader: String,
     },
+    ResetReaders,
 }
 
 fn yes() -> bool {
@@ -122,6 +174,7 @@ pub enum ErrorCode {
     BlockedWrite,
     PcscUnavailable,
     Busy,
+    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -521,5 +574,52 @@ mod tests {
         );
         let v = serde_json::to_value(Event::CardRemoved { reader: "R".into() }).unwrap();
         assert_eq!(v, json!({"event":"card_removed","reader":"R"}));
+    }
+
+    #[test]
+    fn status_fields() {
+        let mut status = Status {
+            service: ServiceStatus::Ready,
+            readers: vec![],
+            usb_readers: None,
+            recovery: None,
+        };
+        // Without USB access the new fields are absent, as before.
+        let v = serde_json::to_value(Event::Readers(status.clone())).unwrap();
+        assert_eq!(v, json!({"event":"readers","service":"ready","readers":[]}));
+        status.usb_readers = Some(vec![UsbReaderInfo {
+            name: "ACS ACR1255U-J1".into(),
+        }]);
+        status.recovery = Some(RecoveryState::Recovering);
+        let hello = Event::Hello {
+            protocol: 1,
+            app: APP_NAME.into(),
+            version: "1.0.0".into(),
+            status,
+        };
+        let v = serde_json::to_value(&hello).unwrap();
+        assert_eq!(
+            v,
+            json!({"event":"hello","protocol":1,"app":"nfc-browser-bridge","version":"1.0.0",
+                   "service":"ready","readers":[],"usbReaders":[{"name":"ACS ACR1255U-J1"}],
+                   "recovery":"recovering"})
+        );
+        assert_eq!(serde_json::from_value::<Event>(v).unwrap(), hello);
+        let v = serde_json::to_value(Event::Recovery {
+            action: RecoveryAction::UsbReset,
+            reason: "why".into(),
+            readers: vec!["R".into()],
+        })
+        .unwrap();
+        assert_eq!(
+            v,
+            json!({"event":"recovery","action":"usb_reset","reason":"why","readers":["R"]})
+        );
+        assert!(matches!(
+            parse_request(r#"{"id":1,"type":"reset_readers"}"#)
+                .unwrap()
+                .body,
+            RequestBody::ResetReaders
+        ));
     }
 }

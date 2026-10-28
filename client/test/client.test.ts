@@ -173,4 +173,52 @@ describe("BridgeClient", () => {
     client.close();
     other.close();
   });
+
+  it("tracks USB readers and recovery, and forgets them on disconnect", async () => {
+    const { fake, client } = setup();
+    const changes: { usb?: string[]; recovery?: string }[] = [];
+    client.on("readers", (r) => changes.push({ usb: r.usbReaders?.map((u) => u.name), recovery: r.recovery }));
+    const steps: string[] = [];
+    client.on("recovery", (e) => steps.push(e.action));
+
+    client.connect();
+    await tick();
+    // A bridge that cannot see USB leaves the fields out.
+    expect(client.usbReaders).toBeNull();
+    expect(client.recovery).toBeNull();
+
+    fake.setUsbReaders([R]);
+    await tick();
+    expect(client.usbReaders).toEqual([{ name: R }]);
+    expect(client.recovery).toBe("idle");
+    fake.removeReader(R);
+    fake.recoveryStep("usb_reset", "test");
+    fake.setRecovery("recovering");
+    await tick();
+    expect(client.recovery).toBe("recovering");
+    expect(steps).toEqual(["usb_reset"]);
+    expect(changes.at(-1)).toEqual({ usb: [R], recovery: "recovering" });
+
+    fake.stop();
+    await tick();
+    expect(client.usbReaders).toBeNull();
+    expect(client.recovery).toBeNull();
+    expect(changes.at(-1)).toEqual({ usb: undefined, recovery: undefined });
+    client.close();
+  });
+
+  it("resets readers where the bridge can see USB", async () => {
+    const { fake, client } = setup();
+    client.connect();
+    await tick();
+    const e = await client.resetReaders().catch((x) => x);
+    expect(e).toBeInstanceOf(BridgeError);
+    expect(e.code).toBe("unsupported");
+
+    fake.setUsbReaders([R]);
+    await tick();
+    expect(await client.resetReaders()).toEqual([R]);
+    expect(fake.readerResets).toBe(1);
+    client.close();
+  });
 });

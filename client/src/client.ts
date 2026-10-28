@@ -10,10 +10,14 @@ import {
   type ErrorCode,
   type HelloEvent,
   type Reader,
+  type ReaderStatus,
+  type RecoveryEvent,
+  type RecoveryState,
   type Request,
   type RequestId,
   type ResultMap,
   type ServiceStatus,
+  type UsbReader,
 } from "./protocol.js";
 
 export type ConnectionState = "connecting" | "open" | "closed";
@@ -62,16 +66,15 @@ export interface BridgeClientOptions {
   maxBackoffMs?: number;
 }
 
-export interface ReadersChange {
-  service: ServiceStatus;
-  readers: Reader[];
-}
+export type ReadersChange = ReaderStatus;
 
 export interface BridgeClientEvents {
   state: ConnectionState;
   hello: HelloEvent;
   /** Full reader list; fired on hello and on every change. */
   readers: ReadersChange;
+  /** A step the bridge took to bring a stuck reader back (macOS). */
+  recovery: RecoveryEvent;
   /** A new tap. Cards already present at connect time are in `readers`, not here. */
   card_present: CardPresentEvent;
   card_removed: CardRemovedEvent;
@@ -94,6 +97,10 @@ export class BridgeClient {
   state: ConnectionState = "closed";
   service: ServiceStatus = "unavailable";
   readers: Reader[] = [];
+  /** Smart-card readers on USB; null where the bridge cannot see USB, or when not connected. */
+  usbReaders: UsbReader[] | null = null;
+  /** Reader recovery; null where the bridge cannot see USB, or when not connected. */
+  recovery: RecoveryState | null = null;
   /** Bridge app version from `hello`. */
   version: string | null = null;
 
@@ -193,9 +200,11 @@ export class BridgeClient {
       p.reject(new BridgeError("disconnected", "Connection to the bridge was lost"));
       this.pending.delete(id);
     }
-    if (this.readers.length || this.service !== "unavailable") {
+    if (this.readers.length || this.service !== "unavailable" || this.usbReaders !== null) {
       this.readers = [];
       this.service = "unavailable";
+      this.usbReaders = null;
+      this.recovery = null;
       this.emit("readers", { service: this.service, readers: [] });
     }
   }
@@ -240,18 +249,19 @@ export class BridgeClient {
         }
         this.backoff = this.opts.minBackoffMs;
         this.version = hello.version;
-        this.service = hello.service;
-        this.readers = hello.readers;
+        this.setStatus(hello);
         this.setState("open");
         this.emit("hello", hello);
-        this.emit("readers", { service: hello.service, readers: hello.readers });
+        this.emit("readers", this.status());
         break;
       }
       case "readers": {
-        const ev = msg as unknown as ReadersChange;
-        this.service = ev.service;
-        this.readers = ev.readers;
-        this.emit("readers", { service: ev.service, readers: ev.readers });
+        this.setStatus(msg as unknown as ReadersChange);
+        this.emit("readers", this.status());
+        break;
+      }
+      case "recovery": {
+        this.emit("recovery", msg as unknown as RecoveryEvent);
         break;
       }
       // The bridge sends a `readers` event right after these; update the list first anyway so
@@ -269,6 +279,20 @@ export class BridgeClient {
         break;
       }
     }
+  }
+
+  private setStatus(s: ReaderStatus): void {
+    this.service = s.service;
+    this.readers = s.readers;
+    this.usbReaders = s.usbReaders ?? null;
+    this.recovery = s.recovery ?? null;
+  }
+
+  private status(): ReadersChange {
+    const s: ReadersChange = { service: this.service, readers: this.readers };
+    if (this.usbReaders) s.usbReaders = this.usbReaders;
+    if (this.recovery) s.recovery = this.recovery;
+    return s;
   }
 
   private setCard(reader: string, card: Reader["card"]): void {
@@ -321,5 +345,13 @@ export class BridgeClient {
   /** Reconnect to the card with a reset; returns the new ATR. */
   async reset(reader: string): Promise<string> {
     return (await this.request({ type: "reset", reader })).atr;
+  }
+
+  /**
+   * Reset every smart-card reader on USB, as if unplugged and plugged back in; returns their
+   * names. Rejects with `unsupported` where the bridge cannot see USB.
+   */
+  async resetReaders(): Promise<string[]> {
+    return (await this.request({ type: "reset_readers" })).reset;
   }
 }

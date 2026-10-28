@@ -14,6 +14,8 @@ Tools:
 - `cargo run -p bridge-core --example probe -- "<reader name>"`: prints the
   reader state, connects once and shows the state changes that follow.
 - `cargo run -p bridge-core --example serve`: the bridge without the tray.
+- `cargo run -p bridge-core --example usb [reset]` (macOS): lists the
+  smart-card readers on USB; `reset` resets them over USB.
 - `cd client && BRIDGE_HW=1 npx vitest run test/hardware.test.ts`: read, write,
   full-capacity write, erase and restore on a real tag through a running bridge.
 
@@ -24,7 +26,7 @@ Tools:
 | Question | ACR1255U-J1 (USB) | ACR1552U |
 | --- | --- | --- |
 | PC/SC reader name(s) | `ACS ACR1255U-J1` (one slot, no PICC/SAM suffix) | _not yet tested_ |
-| Driver | Apple's bundled CCID driver (`ifd-ccid.bundle`) works; no ACS driver needed | _not yet tested_ |
+| Driver | Apple's own CCID driver (`usbsmartcardreaderd`) works; no ACS driver needed | _not yet tested_ |
 | HID + CCID together | n/a | _not yet tested_ |
 | UID format | `FF CA` → `04699E22C01C90` (7 bytes, 14 hex chars) | _not yet tested_ |
 | Idle behaviour | see "Idle card power-down" below | _not yet tested_ |
@@ -56,6 +58,14 @@ Other observations:
   reproducible afterwards (startup, clean restart and kill-and-relaunch all
   found the card within 0.5 s). Earlier the same reader also dropped off USB
   for 16 s (15:29:35 → 15:29:51). Watch for this in the 30-minute idle check.
+- **USB reset without root (2026-10-28, macOS 27).** A normal user can open
+  the reader's `IOUSBHostDevice` (without the root-only capture option) while
+  Apple's driver holds its interface, and `reset()` it. The kernel logs
+  "destroying 0x072f/223f … reset API call", re-enumerates the reader within
+  ~10 ms, the smart-card service lists it again and the bridge sees it back
+  about 1 s later. Cards read normally afterwards; a card left on the reader
+  is detected again. No long beep or LED change: the reader's firmware does not
+  restart, so whether a reset clears a reader that has hung is still unknown.
 - Timings through the bridge (NTAG215, ACR1255U-J1, debug build): multi-record
   write 20 pages ≈ 160 ms; full-capacity write (492-byte message, 125 pages)
   ≈ 950 ms; full read ≈ 140 ms.

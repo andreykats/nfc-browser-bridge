@@ -108,6 +108,16 @@ the websites currently connected.
   macOS: `~/Library/Logs/NFCBrowserBridge/`;
   Windows: `%LOCALAPPDATA%\NFCBrowserBridge\logs\`.
   Daily files, last 7 kept. Start the app with `RUST_LOG=debug` to log APDUs.
+  - `bridge.*.log`: readers and cards coming and going, reader states,
+    recovery steps, and a `status` line every 10 minutes.
+  - `macos.*.log` (macOS): a copy of the system log's lines about USB, the
+    smart-card service and sleep/wake. macOS itself keeps them only for a day
+    or two.
+- **Reader plugged in but not working:** on macOS the bridge resets a reader
+  that is on USB but not listed by the smart-card service, or whose card stops
+  answering, as if it had been replugged (see
+  [PROTOCOL.md](docs/PROTOCOL.md#reader-recovery)). If two resets do not help,
+  the log says "it needs unplugging and plugging back in".
 - **"Port 38241 in use by another app":** another program listens on the
   bridge's port. The bridge retries every 5 seconds.
 - **Unattended use:** the app runs the bridge as a child process and starts it
@@ -119,8 +129,9 @@ the websites currently connected.
 - **Windows "installing device driver" pop-ups or `sharing_violation` errors:**
   turn off Smart Card Plug and Play by setting the DWORD
   `HKLM\SOFTWARE\Policies\Microsoft\Windows\ScPnP\EnableScPnP` to `0`.
-- **macOS driver:** the built-in CCID driver handled the ACR1255U-J1 in testing,
-  so ACS's macOS driver is not needed.
+- **macOS driver:** Apple's own CCID driver (`usbsmartcardreaderd`) handled the
+  ACR1255U-J1 in testing, so ACS's macOS driver is not needed. Apple's driver
+  does not pass escape commands (`SCardControl`) to the reader.
 
 ## Development
 
