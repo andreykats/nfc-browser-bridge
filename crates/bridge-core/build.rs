@@ -23,7 +23,14 @@ fn git_version() -> Result<String, String> {
     let git_dir = git(&["rev-parse", "--absolute-git-dir"])?;
     watch_refs(Path::new(&git_dir));
 
-    let tags = git(&["tag", "--merged", "HEAD", "--list", "v*", "--sort=-v:refname"])?;
+    let tags = git(&[
+        "tag",
+        "--merged",
+        "HEAD",
+        "--list",
+        "v*",
+        "--sort=-v:refname",
+    ])?;
     let tag = tags
         .lines()
         .find(|t| is_release(t))
@@ -39,7 +46,11 @@ fn git_version() -> Result<String, String> {
 
 /// Rerun when HEAD moves (checkout, commit) or tags change (fetch).
 fn watch_refs(git_dir: &Path) {
-    let mut paths = vec![git_dir.join("HEAD"), git_dir.join("refs/tags"), git_dir.join("packed-refs")];
+    let mut paths = vec![
+        git_dir.join("HEAD"),
+        git_dir.join("refs/tags"),
+        git_dir.join("packed-refs"),
+    ];
     if let Ok(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
         paths.push(git_dir.join(branch));
     }
@@ -50,9 +61,14 @@ fn watch_refs(git_dir: &Path) {
 }
 
 fn is_release(tag: &str) -> bool {
-    let Some(v) = tag.strip_prefix('v') else { return false };
+    let Some(v) = tag.strip_prefix('v') else {
+        return false;
+    };
     let parts: Vec<&str> = v.split('.').collect();
-    parts.len() == 3 && parts.iter().all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn git(args: &[&str]) -> Result<String, String> {
