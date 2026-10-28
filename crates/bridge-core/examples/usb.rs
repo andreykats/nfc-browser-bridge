@@ -13,7 +13,7 @@ fn main() {
     }
     let reset = std::env::args().nth(1).as_deref() == Some("reset");
     for r in &readers {
-        println!("{} (id 0x{:x})", r.name, r.id);
+        println!("{} (id 0x{:x}): {}", r.name, r.id, r.identity);
         if reset {
             match usb.reset(r) {
                 Ok(()) => println!("  reset"),

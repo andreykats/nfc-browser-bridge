@@ -109,7 +109,9 @@ the websites currently connected.
   Windows: `%LOCALAPPDATA%\NFCBrowserBridge\logs\`.
   Daily files, last 7 kept. Start the app with `RUST_LOG=debug` to log APDUs.
   - `bridge.*.log`: readers and cards coming and going, reader states,
-    recovery steps, and a `status` line every 10 minutes.
+    recovery steps, and a `status` line every 10 minutes. On macOS a reader
+    arriving on USB is logged with its USB IDs, firmware release, serial
+    number and port, so the log shows which unit was in use.
   - `macos.*.log` (macOS): a copy of the system log's lines about USB, the
     smart-card service and sleep/wake. macOS itself keeps them only for a day
     or two.

@@ -400,10 +400,10 @@ fn log_usb_change(before: Option<&[UsbReader]>, after: Option<&[UsbReader]>, our
     let (before, after) = (before.unwrap_or_default(), after.unwrap_or_default());
     let why = if ours { " (bridge reset)" } else { "" };
     for r in before.iter().filter(|r| !after.contains(r)) {
-        tracing::info!(reader = %r.name, id = %format_args!("{:#x}", r.id), "reader left USB{why}");
+        tracing::info!(reader = %r.name, id = %format_args!("{:#x}", r.id), usb = %r.identity, "reader left USB{why}");
     }
     for r in after.iter().filter(|r| !before.contains(r)) {
-        tracing::info!(reader = %r.name, id = %format_args!("{:#x}", r.id), "reader on USB{why}");
+        tracing::info!(reader = %r.name, id = %format_args!("{:#x}", r.id), usb = %r.identity, "reader on USB{why}");
     }
 }
 

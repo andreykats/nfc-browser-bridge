@@ -15,7 +15,7 @@ use objc2_io_kit::{
 };
 use objc2_io_usb_host::{IOUSBHostDevice, IOUSBHostObjectInitOptions};
 
-use crate::usb::{UsbControl, UsbReader};
+use crate::usb::{UsbControl, UsbIdentity, UsbReader};
 
 /// USB interface class of smart-card readers (CCID).
 const CCID_CLASS: i64 = 0x0B;
@@ -47,7 +47,16 @@ impl UsbControl for MacUsb {
             .flatten()
             .collect::<Vec<_>>()
             .join(" ");
-            readers.push(UsbReader { name, id });
+            let number = |key| number_property(&device, key);
+            let identity = UsbIdentity {
+                vendor_id: number("idVendor").and_then(|v| u16::try_from(v).ok()),
+                product_id: number("idProduct").and_then(|v| u16::try_from(v).ok()),
+                release: number("bcdDevice").and_then(|v| u16::try_from(v).ok()),
+                serial: string_property(&device, "USB Serial Number"),
+                location: number("locationID").and_then(|v| u32::try_from(v).ok()),
+                power_ma: number("UsbPowerSinkAllocation").and_then(|v| u32::try_from(v).ok()),
+            };
+            readers.push(UsbReader { name, id, identity });
         }
         Some(readers)
     }

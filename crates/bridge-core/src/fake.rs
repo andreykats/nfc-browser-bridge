@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use crate::backend::{
     Disposition, PcscBackend, PcscCard, PcscContext, PcscError, ReaderWatch, Transmit, state,
 };
-use crate::usb::{UsbControl, UsbReader};
+use crate::usb::{UsbControl, UsbIdentity, UsbReader};
 
 /// How long a fake reader is gone from PC/SC after a USB reset.
 const USB_RESET_GAP: Duration = Duration::from_millis(100);
@@ -409,6 +409,7 @@ impl UsbControl for FakeUsb {
                 .map(|(name, id)| UsbReader {
                     name: name.clone(),
                     id: *id,
+                    identity: UsbIdentity::default(),
                 })
                 .collect(),
         )
