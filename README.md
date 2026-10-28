@@ -156,7 +156,9 @@ Hardware tools and the release checklist are in
 [`.github/workflows/release.yml`](.github/workflows/release.yml) from the
 Actions tab. Each run is numbered automatically as the next `v1.0.N` (the
 series comes from the workspace version in `Cargo.toml`; never create `v*` tags
-by hand); the test site is published to GitHub Pages by
+by hand). Local builds show the latest release tag in their history instead,
+plus `+<commits>.g<hash>` when they're past it (e.g. `1.0.6+3.g0d486f9`); run
+`git fetch --tags` to pick up new releases. The test site is published to GitHub Pages by
 [`pages.yml`](.github/workflows/pages.yml).
 
 The log upload bucket's rules are in [`firebase/storage.rules`](firebase/storage.rules)

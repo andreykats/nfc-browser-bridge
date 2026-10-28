@@ -28,6 +28,10 @@ use hub::Hub;
 pub use hub::{BridgeStatus, ServerState, StatusListener};
 use recovery::{Recovery, RecoveryConfig};
 
+/// The app version: the release version, or for local builds the latest release
+/// tag they contain plus how far past it they are (see build.rs).
+pub const VERSION: &str = env!("BRIDGE_VERSION");
+
 pub struct BridgeConfig {
     /// 0 picks an ephemeral port (tests).
     pub port: u16,
@@ -40,7 +44,7 @@ impl Default for BridgeConfig {
     fn default() -> Self {
         Self {
             port: protocol::DEFAULT_PORT,
-            version: env!("CARGO_PKG_VERSION").into(),
+            version: VERSION.into(),
             recovery: RecoveryConfig::default(),
         }
     }

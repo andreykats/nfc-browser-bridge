@@ -33,12 +33,15 @@ jobs:
     runs-on: macos-latest
     env:
       MACOSX_DEPLOYMENT_TARGET: "11.0"
+      BRIDGE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - run: |
           rustup toolchain install stable --profile minimal -t aarch64-apple-darwin,x86_64-apple-darwin
           rustup default stable
       - uses: Swatinem/rust-cache@v2
+      # BRIDGE_VERSION is what the app shows; Cargo.toml's version still goes
+      # into the Windows .exe metadata.
       - name: Stamp version
         shell: bash
         run: sed -i.bak 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml && rm Cargo.toml.bak
@@ -60,10 +63,14 @@ jobs:
   windows:
     needs: version
     runs-on: windows-latest
+    env:
+      BRIDGE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install stable --profile minimal -t x86_64-pc-windows-msvc && rustup default stable
       - uses: Swatinem/rust-cache@v2
+      # BRIDGE_VERSION is what the app shows; Cargo.toml's version still goes
+      # into the Windows .exe metadata.
       - name: Stamp version
         shell: bash
         run: sed -i.bak 's/^version = ".*"/version = "${{ needs.version.outputs.version }}"/' Cargo.toml && rm Cargo.toml.bak

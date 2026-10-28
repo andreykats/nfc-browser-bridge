@@ -41,7 +41,7 @@ pub struct MenuModel {
 
 impl MenuModel {
     pub fn from_state(s: &AppState) -> Self {
-        let header = format!("NFC Browser Bridge v{}", env!("CARGO_PKG_VERSION"));
+        let header = format!("NFC Browser Bridge v{}", bridge_core::VERSION);
         let mut readers = Vec::new();
         let mut icon = IconState::NoReader;
         let status = if let Some(e) = &s.start_error {

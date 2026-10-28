@@ -19,7 +19,7 @@ use std::time::Duration;
 use bridge_core::health::Health;
 use bridge_core::protocol::DEFAULT_PORT;
 use bridge_core::real::RealPcsc;
-use bridge_core::{Bridge, BridgeConfig, BridgeStatus, StartError};
+use bridge_core::{Bridge, BridgeConfig, BridgeStatus, StartError, VERSION};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
 use tray_icon::menu::MenuEvent;
@@ -30,7 +30,6 @@ use menu::{AppState, MenuModel};
 use update::UpdateInfo;
 use upload::{UploadError, Uploaded};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// macOS menu-bar icons are template images, tinted by the system for light/dark menu bars.
 const TEMPLATE_ICONS: bool = cfg!(target_os = "macos");
 const RETRY_BIND: Duration = Duration::from_secs(5);
