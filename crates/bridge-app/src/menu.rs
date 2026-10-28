@@ -9,6 +9,7 @@ use bridge_app::icons::IconState;
 
 pub const ID_AUTOSTART: &str = "autostart";
 pub const ID_LOGS: &str = "logs";
+pub const ID_UPLOAD: &str = "upload";
 pub const ID_UPDATE: &str = "update";
 pub const ID_QUIT: &str = "quit";
 
@@ -20,16 +21,20 @@ pub struct AppState {
     pub start_error: Option<String>,
     pub autostart: bool,
     pub update: Option<UpdateInfo>,
+    /// "Upload logs" is in progress.
+    pub uploading: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuModel {
     pub header: String,
     pub status: String,
-    pub readers: Vec<String>,
+    /// Each reader's name and, for the line under it, its card.
+    pub readers: Vec<(String, String)>,
     pub clients: String,
     pub autostart: bool,
     pub update: Option<String>,
+    pub uploading: bool,
     pub icon: IconState,
     pub tooltip: String,
 }
@@ -61,17 +66,17 @@ impl MenuModel {
                         .filter(|r| r.kind != ReaderKind::Sam)
                         .collect();
                     for r in &piccs {
-                        readers.push(match &r.card {
+                        let card = match &r.card {
                             Some(c) => format!(
-                                "{} — card {}",
-                                r.name,
+                                "card {}",
                                 c.uid
                                     .as_deref()
                                     .map(short_uid)
                                     .unwrap_or_else(|| "(no UID)".into())
                             ),
-                            None => format!("{} — no card", r.name),
-                        });
+                            None => "no card".to_string(),
+                        };
+                        readers.push((r.name.clone(), card));
                     }
                     if piccs.iter().any(|r| r.card.is_some()) {
                         icon = IconState::CardPresent;
@@ -107,6 +112,7 @@ impl MenuModel {
                 .update
                 .as_ref()
                 .map(|u| format!("Update available: v{}", u.version)),
+            uploading: s.uploading,
             icon,
             tooltip,
         }
@@ -116,8 +122,9 @@ impl MenuModel {
         let menu = Menu::new();
         menu.append(&MenuItem::new(&self.header, false, None))?;
         menu.append(&MenuItem::new(&self.status, false, None))?;
-        for r in &self.readers {
-            menu.append(&MenuItem::new(format!("    {r}"), false, None))?;
+        for (name, card) in &self.readers {
+            menu.append(&MenuItem::new(format!("    {name}"), false, None))?;
+            menu.append(&MenuItem::new(format!("        {card}"), false, None))?;
         }
         menu.append(&MenuItem::new(&self.clients, false, None))?;
         menu.append(&PredefinedMenuItem::separator())?;
@@ -129,6 +136,11 @@ impl MenuModel {
             None,
         ))?;
         menu.append(&MenuItem::with_id(ID_LOGS, "Open log folder", true, None))?;
+        menu.append(&if self.uploading {
+            MenuItem::with_id(ID_UPLOAD, "Uploading logs…", false, None)
+        } else {
+            MenuItem::with_id(ID_UPLOAD, "Upload logs", true, None)
+        })?;
         if let Some(u) = &self.update {
             menu.append(&MenuItem::with_id(ID_UPDATE, u, true, None))?;
         }
@@ -175,7 +187,10 @@ mod tests {
         assert_eq!(m.status, "Ready on port 38241");
         assert_eq!(
             m.readers,
-            vec!["ACS ACR1552 1S CL Reader PICC 0 — card 04699E22…"]
+            vec![(
+                "ACS ACR1552 1S CL Reader PICC 0".to_string(),
+                "card 04699E22…".to_string()
+            )]
         );
         assert_eq!(m.clients, "Clients: example.com");
         assert_eq!(m.icon, IconState::CardPresent);
