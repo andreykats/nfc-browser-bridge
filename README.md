@@ -115,8 +115,10 @@ the websites currently connected.
     or two.
 - **Sending logs:** tray menu → **Upload logs** copies all of the above to the
   "Logs" Firebase project and shows where they went, e.g.
-  `nfc-browser-bridge/Kiosk-Mac-mini/20261028T180000Z_v1.0.7`. Find that
-  folder under Storage in the
+  `nfc-browser-bridge/Users-Mac-mini-1A2B3C4D/20261028T180000Z_v1.0.7`: the
+  computer's name, the start of its hardware UUID (Windows: machine GUID) to
+  tell apart computers with the same name, then the upload time in UTC. Find
+  that folder under Storage in the
   [Firebase console](https://console.firebase.google.com/project/logs-wvmye/storage).
   The app can only add files there; it cannot read, change or delete any.
 - **Reader plugged in but not working:** on macOS the bridge resets a reader

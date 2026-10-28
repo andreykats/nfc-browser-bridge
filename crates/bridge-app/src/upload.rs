@@ -1,6 +1,6 @@
 //! "Upload logs": copies the log files to Cloud Storage in the "Logs" Firebase project
 //! (logs-wvmye), into a new folder per upload:
-//! `nfc-browser-bridge/<host>/<UTC time>_v<version>/<file>`.
+//! `nfc-browser-bridge/<computer name>-<hardware ID>/<UTC time>_v<version>/<file>`.
 //! The bucket's rules (`firebase/storage.rules`) let anyone add files there and nobody read,
 //! overwrite or delete them, so the app carries no credentials.
 
@@ -23,7 +23,7 @@ const MAX_BYTES: usize = 9 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Uploaded {
-    /// Where the files went, e.g. `nfc-browser-bridge/Kiosk-Mac-mini/20261028T180000Z_v1.0.7`.
+    /// Where the files went, e.g. `nfc-browser-bridge/Users-Mac-mini-1A2B3C4D/20261028T180000Z_v1.0.7`.
     pub folder: String,
     pub files: usize,
 }
@@ -145,7 +145,8 @@ fn folder(host: &str, now: OffsetDateTime, version: &str) -> String {
     )
 }
 
-/// The computer's name as set in System Settings / Windows.
+/// The computer's name as set in System Settings / Windows, then its hardware ID: names repeat
+/// (every Mac mini set up with the account "User" is "Users-Mac-mini"), the ID tells them apart.
 fn host_name() -> String {
     #[cfg(target_os = "macos")]
     let raw = std::process::Command::new("scutil")
@@ -156,21 +157,75 @@ fn host_name() -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
     #[cfg(not(target_os = "macos"))]
     let raw = std::env::var("COMPUTERNAME").ok();
-    sanitize_host(raw.as_deref().unwrap_or_default())
+    let id = hardware_id();
+    if id.is_none() {
+        tracing::warn!("cannot read the hardware ID; uploading under the computer name alone");
+    }
+    machine_name(raw.as_deref().unwrap_or_default(), id.as_deref())
 }
 
-/// Letters, digits and `-` (what the rules accept), at most 63 characters.
-fn sanitize_host(raw: &str) -> String {
-    let host: String = raw
+/// `<name>-<first 8 hex digits of the ID>`, or the name alone without a usable ID. Letters, digits
+/// and `-` (what the rules accept), at most 63 characters.
+fn machine_name(raw: &str, hardware_id: Option<&str>) -> String {
+    let id: Option<String> = hardware_id
+        .map(|id| {
+            id.chars()
+                .filter(char::is_ascii_hexdigit)
+                .take(8)
+                .collect::<String>()
+                .to_ascii_uppercase()
+        })
+        .filter(|id| id.len() == 8);
+    let max = if id.is_some() { 63 - 9 } else { 63 };
+    let mut name: String = raw
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .take(63)
+        .take(max)
         .collect();
-    if host.chars().all(|c| c == '-') {
-        "unknown".to_string()
-    } else {
-        host
+    if name.chars().all(|c| c == '-') {
+        name = "unknown".to_string();
     }
+    match id {
+        Some(id) => format!("{name}-{id}"),
+        None => name,
+    }
+}
+
+/// The Mac's hardware UUID, which stays the same across reinstalls and renames.
+#[cfg(target_os = "macos")]
+fn hardware_id() -> Option<String> {
+    let out = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    platform_uuid(&String::from_utf8_lossy(&out.stdout)).map(str::to_string)
+}
+
+/// `"IOPlatformUUID" = "<uuid>"` in `ioreg` output.
+#[cfg(any(target_os = "macos", test))]
+fn platform_uuid(ioreg: &str) -> Option<&str> {
+    let line = ioreg.lines().find(|l| l.contains("\"IOPlatformUUID\""))?;
+    let (_, value) = line.split_once('=')?;
+    Some(value.trim().trim_matches('"')).filter(|v| !v.is_empty())
+}
+
+/// Windows' machine GUID, set when Windows is installed.
+#[cfg(windows)]
+fn hardware_id() -> Option<String> {
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY};
+    winreg::RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(
+            r"SOFTWARE\Microsoft\Cryptography",
+            KEY_READ | KEY_WOW64_64KEY,
+        )
+        .and_then(|k| k.get_value::<String, _>("MachineGuid"))
+        .ok()
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn hardware_id() -> Option<String> {
+    None
 }
 
 /// At most `max` bytes: the end of the file from the first whole line, after a note.
@@ -219,12 +274,42 @@ mod tests {
     }
 
     #[test]
-    fn host_names() {
-        assert_eq!(sanitize_host("Kiosk-Mac-mini"), "Kiosk-Mac-mini");
-        assert_eq!(sanitize_host("Andrey’s Mac.local"), "Andrey-s-Mac-local");
-        assert_eq!(sanitize_host(""), "unknown");
-        assert_eq!(sanitize_host("..."), "unknown");
-        assert_eq!(sanitize_host(&"a".repeat(80)).len(), 63);
+    fn machine_names() {
+        let mac = Some("1a2b3c4d-5E6F-7A8B-9C0D-112233445566");
+        assert_eq!(
+            machine_name("Users-Mac-mini", mac),
+            "Users-Mac-mini-1A2B3C4D"
+        );
+        assert_eq!(
+            machine_name("Andrey’s Mac.local", mac),
+            "Andrey-s-Mac-local-1A2B3C4D"
+        );
+        assert_eq!(machine_name("", mac), "unknown-1A2B3C4D");
+        assert_eq!(machine_name("...", None), "unknown");
+        assert_eq!(machine_name("Users-Mac-mini", None), "Users-Mac-mini");
+        // Not enough hex digits for an ID: the name alone.
+        assert_eq!(
+            machine_name("Users-Mac-mini", Some("xyz-12")),
+            "Users-Mac-mini"
+        );
+        let long = machine_name(&"a".repeat(80), mac);
+        assert_eq!(long.len(), 63);
+        assert!(long.ends_with("-1A2B3C4D"));
+        assert_eq!(machine_name(&"a".repeat(80), None).len(), 63);
+    }
+
+    #[test]
+    fn reads_the_platform_uuid() {
+        let ioreg = r#"+-o Mac16,10  <class IOPlatformExpertDevice, id 0x100000254>
+    {
+      "IOPlatformSerialNumber" = "ABC123"
+      "IOPlatformUUID" = "1A2B3C4D-5E6F-7A8B-9C0D-112233445566"
+    }"#;
+        assert_eq!(
+            platform_uuid(ioreg),
+            Some("1A2B3C4D-5E6F-7A8B-9C0D-112233445566")
+        );
+        assert_eq!(platform_uuid("nothing here"), None);
     }
 
     #[test]
