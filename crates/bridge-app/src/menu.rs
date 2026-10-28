@@ -39,14 +39,6 @@ pub struct MenuModel {
     pub tooltip: String,
 }
 
-fn short_uid(uid: &str) -> String {
-    if uid.len() > 8 {
-        format!("{}…", &uid[..8])
-    } else {
-        uid.to_string()
-    }
-}
-
 impl MenuModel {
     pub fn from_state(s: &AppState) -> Self {
         let header = format!("NFC Browser Bridge v{}", env!("CARGO_PKG_VERSION"));
@@ -67,14 +59,8 @@ impl MenuModel {
                         .collect();
                     for r in &piccs {
                         let card = match &r.card {
-                            Some(c) => format!(
-                                "card {}",
-                                c.uid
-                                    .as_deref()
-                                    .map(short_uid)
-                                    .unwrap_or_else(|| "(no UID)".into())
-                            ),
-                            None => "no card".to_string(),
+                            Some(c) => c.uid.clone().unwrap_or_else(|| "(no UID)".into()),
+                            None => "waiting…".to_string(),
                         };
                         readers.push((r.name.clone(), card));
                     }
@@ -189,7 +175,7 @@ mod tests {
             m.readers,
             vec![(
                 "ACS ACR1552 1S CL Reader PICC 0".to_string(),
-                "card 04699E22…".to_string()
+                "04699E22C01C90".to_string()
             )]
         );
         assert_eq!(m.clients, "Clients: example.com");
