@@ -1,8 +1,8 @@
 //! "Upload logs": copies the log files to Cloud Storage in the "Logs" Firebase project
 //! (logs-wvmye), into a new folder per upload:
 //! `nfc-browser-bridge/<computer name>-<hardware ID>/<UTC time>_v<version>/<file>`.
-//! The bucket's rules (`firebase/storage.rules`) let anyone add files there and nobody read,
-//! overwrite or delete them, so the app carries no credentials.
+//! The bucket's rules (logs-backend repo, `storage.rules`) let anyone add files there and
+//! nobody read, overwrite or delete them, so the app carries no credentials.
 
 use std::fmt;
 use std::io;

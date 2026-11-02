@@ -163,10 +163,7 @@ plus `+<commits>.g<hash>` when they're past it (e.g. `1.0.6+3.g0d486f9`); run
 `git fetch --tags` to pick up new releases. The test site is published to GitHub Pages by
 [`pages.yml`](.github/workflows/pages.yml).
 
-The log upload bucket's rules are in [`firebase/storage.rules`](firebase/storage.rules)
-(deploy with `cd firebase && npx firebase-tools deploy --only storage`); its
-90-day auto-delete is [`firebase/lifecycle.json`](firebase/lifecycle.json)
-(`gcloud storage buckets update gs://logs-wvmye.firebasestorage.app --lifecycle-file=firebase/lifecycle.json`).
+The log upload bucket's rules and 90-day auto-delete live in the logs-backend repo.
 
 ## License
 
