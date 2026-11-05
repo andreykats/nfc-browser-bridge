@@ -43,7 +43,8 @@ console.
    from the disk image, or "Start at login" cannot turn on.
 2. The build is not signed by Apple, so the first launch is blocked. Open
    **System Settings → Privacy & Security**, scroll to the message about
-   NFC Browser Bridge and click **Open Anyway**. This repeats after every update.
+   NFC Browser Bridge and click **Open Anyway**. Updates installed from the
+   menu (see [Updates](#updates)) don't ask again; a DMG downloaded by hand does.
 3. A card icon appears in the menu bar. **Start at login** turns on by itself
    the first time the app runs from Applications; it can be turned off in the
    menu and stays off.
@@ -59,6 +60,22 @@ console.
 4. Windows hides new tray icons in the overflow area. Drag the card icon onto
    the taskbar (or enable it under Settings → Personalization → Taskbar → Other
    system tray icons) so it stays visible.
+
+### Updates
+
+The app checks GitHub for a newer release at launch and then daily. When one
+exists, the menu shows **Update to vX.Y.Z and restart**. Clicking it downloads
+the installer for this platform, checks its signature against the release key
+built into the app, installs it and restarts:
+
+- **macOS:** the app in Applications is replaced with the one in the new DMG.
+  The account needs write access to the folder the app is in (admin accounts
+  have it for Applications).
+- **Windows:** the setup runs silently with the options of the first install,
+  then starts the app again. Its log is `update-install.log` in the log folder.
+
+The bridge is unavailable for a few seconds while it restarts. If the update
+can't be installed, a dialog says why and offers the release page instead.
 
 ## Reader setup
 
@@ -160,7 +177,13 @@ Actions tab. Each run is numbered automatically as the next `v1.0.N` (the
 series comes from the workspace version in `Cargo.toml`; never create `v*` tags
 by hand). Local builds show the latest release tag in their history instead,
 plus `+<commits>.g<hash>` when they're past it (e.g. `1.0.6+3.g0d486f9`); run
-`git fetch --tags` to pick up new releases. The test site is published to GitHub Pages by
+`git fetch --tags` to pick up new releases. The release job signs each
+installer with [minisign](https://jedisct1.github.io/minisign/) using the
+`MINISIGN_SECRET_KEY` repository secret (an unencrypted key, made with
+`minisign -G -W`); its public half is
+[`crates/bridge-app/release-key.pub`](crates/bridge-app/release-key.pub), which
+the app trusts. Changing the key means apps that have the old key must be
+updated by hand once. The test site is published to GitHub Pages by
 [`pages.yml`](.github/workflows/pages.yml).
 
 The log upload bucket's rules and 90-day auto-delete live in the logs-backend repo.

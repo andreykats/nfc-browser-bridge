@@ -26,6 +26,7 @@ serde_json = "1"
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 rfd = { version = "0.17", default-features = false }
 time = "0.3"
+minisign-verify = "0.3"
 
 [dev-dependencies]
 png = "0.18"

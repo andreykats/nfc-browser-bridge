@@ -21,6 +21,8 @@ pub struct AppState {
     pub start_error: Option<String>,
     pub autostart: bool,
     pub update: Option<UpdateInfo>,
+    /// The update is being downloaded and installed.
+    pub installing: bool,
     /// "Upload logs" is in progress.
     pub uploading: bool,
 }
@@ -33,7 +35,8 @@ pub struct MenuModel {
     pub readers: Vec<(String, String)>,
     pub clients: String,
     pub autostart: bool,
-    pub update: Option<String>,
+    /// The update item's label and whether it can be clicked.
+    pub update: Option<(String, bool)>,
     pub uploading: bool,
     pub icon: IconState,
     pub tooltip: String,
@@ -94,10 +97,12 @@ impl MenuModel {
             readers,
             clients,
             autostart: s.autostart,
-            update: s
-                .update
-                .as_ref()
-                .map(|u| format!("Update available: v{}", u.version)),
+            update: s.update.as_ref().map(|u| match &u.download {
+                _ if s.installing => (format!("Updating to v{}…", u.version), false),
+                Some(_) => (format!("Update to v{} and restart", u.version), true),
+                // Nothing the app can install: the item opens the release page.
+                None => (format!("Update available: v{}", u.version), true),
+            }),
             uploading: s.uploading,
             icon,
             tooltip,
@@ -127,8 +132,8 @@ impl MenuModel {
         } else {
             MenuItem::with_id(ID_UPLOAD, "Upload logs", true, None)
         })?;
-        if let Some(u) = &self.update {
-            menu.append(&MenuItem::with_id(ID_UPDATE, u, true, None))?;
+        if let Some((label, enabled)) = &self.update {
+            menu.append(&MenuItem::with_id(ID_UPDATE, label, *enabled, None))?;
         }
         menu.append(&PredefinedMenuItem::separator())?;
         menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None))?;
@@ -139,6 +144,7 @@ impl MenuModel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::update::Download;
     use bridge_core::protocol::{CardInfo, Reader};
 
     fn status(readers: Vec<Reader>) -> AppState {
@@ -192,5 +198,31 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(m.status, "Port 38241 in use by another app");
+    }
+
+    #[test]
+    fn update_item() {
+        let mut s = AppState {
+            update: Some(UpdateInfo {
+                version: "1.0.8".into(),
+                url: "https://example.com/release".into(),
+                download: None,
+            }),
+            ..Default::default()
+        };
+        let label = |s: &AppState| MenuModel::from_state(s).update;
+        assert_eq!(label(&s), Some(("Update available: v1.0.8".into(), true)));
+        s.update.as_mut().unwrap().download = Some(Download {
+            name: "a.dmg".into(),
+            url: "https://example.com/a.dmg".into(),
+            signature_url: "https://example.com/a.dmg.minisig".into(),
+        });
+        assert_eq!(
+            label(&s),
+            Some(("Update to v1.0.8 and restart".into(), true))
+        );
+        s.installing = true;
+        assert_eq!(label(&s), Some(("Updating to v1.0.8…".into(), false)));
+        assert_eq!(label(&AppState::default()), None);
     }
 }

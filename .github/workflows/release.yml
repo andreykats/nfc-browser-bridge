@@ -97,10 +97,31 @@ jobs:
     needs: [version, macos, windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
+      # The app installs an update only if its .minisig verifies against
+      # crates/bridge-app/release-key.pub and its trusted comment names that
+      # version and file (install.rs, signed_comment).
+      - name: Sign
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          [ -n "$MINISIGN_SECRET_KEY" ] || { echo "The MINISIGN_SECRET_KEY secret is not set" >&2; exit 1; }
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+          key=$(mktemp)
+          trap 'rm -f "$key"' EXIT
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$key"
+          for f in dist/*; do
+            name=$(basename "$f")
+            minisign -S -s "$key" -m "$f" -t "nfc-browser-bridge $VERSION $name"
+            # -H: the app only accepts prehashed signatures.
+            minisign -V -H -p crates/bridge-app/release-key.pub -m "$f"
+          done
+          ls -l dist
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |

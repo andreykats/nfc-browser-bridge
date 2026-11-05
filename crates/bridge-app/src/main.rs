@@ -4,6 +4,7 @@
 
 mod autostart;
 mod http;
+mod install;
 mod instance;
 mod logging;
 mod menu;
@@ -26,6 +27,7 @@ use tray_icon::menu::MenuEvent;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use bridge_app::icons::{self, IconState};
+use install::{InstallError, Next};
 use menu::{AppState, MenuModel};
 use update::UpdateInfo;
 use upload::{UploadError, Uploaded};
@@ -42,6 +44,7 @@ enum UserEvent {
     Status(BridgeStatus),
     Menu(MenuEvent),
     Update(UpdateInfo),
+    Installed(Result<Next, InstallError>),
     Uploaded(Result<Uploaded, UploadError>),
     RetryBind,
 }
@@ -172,20 +175,93 @@ impl App {
                     }
                 }
             }
-            menu::ID_UPDATE => {
-                if let Some(u) = &self.state.update {
+            menu::ID_UPDATE if !self.state.installing => {
+                let Some(u) = self.state.update.clone() else {
+                    return;
+                };
+                if u.download.is_none() {
                     open(&u.url);
+                    return;
+                }
+                tracing::info!(version = %u.version, "installing update");
+                let proxy = Mutex::new(self.proxy.clone());
+                let spawned = install::spawn(VERSION, u, move |r| {
+                    let _ = proxy
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .send_event(UserEvent::Installed(r));
+                });
+                match spawned {
+                    Ok(()) => self.state.installing = true,
+                    Err(e) => self.install_failed(&InstallError::Io("start the update", e)),
                 }
             }
             menu::ID_QUIT => {
                 tracing::info!("quit");
-                self.tray = None;
-                if let Some(b) = self.bridge.take() {
-                    b.shutdown();
-                }
+                self.stop();
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
+        }
+    }
+
+    /// Close the tray and the bridge before the process exits.
+    fn stop(&mut self) {
+        self.tray = None;
+        if let Some(b) = self.bridge.take() {
+            b.shutdown();
+        }
+    }
+
+    fn on_installed(&mut self, r: Result<Next, InstallError>, control_flow: &mut ControlFlow) {
+        self.state.installing = false;
+        match r {
+            #[cfg(target_os = "macos")]
+            Ok(Next::Restart) => {
+                tracing::info!("restarting into the update");
+                self.stop();
+                if supervisor::is_child() {
+                    *control_flow = ControlFlow::ExitWithCode(supervisor::EXIT_RESTART);
+                } else {
+                    let e = std::env::current_exe()
+                        .map_or_else(|e| e, |exe| supervisor::relaunch(&exe));
+                    tracing::error!(error = %e, "cannot restart");
+                    dialog(
+                        "Update",
+                        &format!(
+                            "The update is installed but the app could not restart: {e}\n\nOpen NFC Browser Bridge again."
+                        ),
+                    );
+                    *control_flow = ControlFlow::Exit;
+                }
+            }
+            #[cfg(windows)]
+            Ok(Next::Exit) => {
+                tracing::info!("exiting for the installer");
+                self.stop();
+                *control_flow = ControlFlow::Exit;
+            }
+            Err(e) => self.install_failed(&e),
+        }
+    }
+
+    /// Say why, and offer the release page to download the update by hand.
+    fn install_failed(&self, e: &InstallError) {
+        tracing::warn!(error = %e, "cannot install the update");
+        let Some(u) = &self.state.update else {
+            return;
+        };
+        let answer = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("Update")
+            .set_description(format!(
+                "Could not install v{}: {e}.\n\nOpen the download page instead?",
+                u.version
+            ))
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show();
+        if answer == rfd::MessageDialogResult::Yes {
+            open(&u.url);
         }
     }
 }
@@ -271,6 +347,7 @@ fn main() {
         oslog::spawn(&dir);
     }
     autostart::refresh();
+    install::cleanup();
     #[cfg(target_os = "macos")]
     keep_out_of_app_nap();
 
@@ -330,6 +407,12 @@ fn main() {
                 app.state.update = Some(u);
                 app.refresh();
             }
+            Event::UserEvent(UserEvent::Installed(r)) => {
+                app.on_installed(r, control_flow);
+                if !matches!(*control_flow, ControlFlow::Exit | ControlFlow::ExitWithCode(_)) {
+                    app.refresh();
+                }
+            }
             Event::UserEvent(UserEvent::Uploaded(r)) => {
                 app.state.uploading = false;
                 app.refresh();
@@ -355,7 +438,7 @@ fn main() {
             }
             Event::UserEvent(UserEvent::Menu(e)) => {
                 app.on_menu(e.id.as_ref(), control_flow);
-                if *control_flow != ControlFlow::Exit {
+                if !matches!(*control_flow, ControlFlow::Exit | ControlFlow::ExitWithCode(_)) {
                     app.refresh();
                 }
             }
