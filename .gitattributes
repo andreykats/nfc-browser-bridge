@@ -1,0 +1,2 @@
+# Signed test fixture: line-ending conversion would break its signature.
+crates/bridge-app/testdata/installer.bin binary
