@@ -451,6 +451,7 @@ mod tests {
         ));
     }
 
+    #[cfg(target_os = "macos")]
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("nfc-bridge-test-{name}-{}", std::process::id()));
         remove_if_exists(&d).unwrap();
