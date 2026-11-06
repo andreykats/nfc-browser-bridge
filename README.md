@@ -63,8 +63,10 @@ console.
 
 ### Updates
 
-The app checks GitHub for a newer release at launch and then daily. When one
-exists, the menu shows **Update to vX.Y.Z and restart**. Clicking it downloads
+The app checks GitHub for a newer release at launch and then daily, and when
+**Check for updates** in the menu is clicked (it says whether one was found and
+offers to install it). When one exists, the menu shows **Update to vX.Y.Z and
+restart** in its place. Clicking it downloads
 the installer for this platform, checks its signature against the release key
 built into the app, installs it and restarts:
 

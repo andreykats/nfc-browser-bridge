@@ -46,6 +46,8 @@ enum UserEvent {
     Status(BridgeStatus),
     Menu(MenuEvent),
     Update(UpdateInfo),
+    /// The outcome of "Check for updates".
+    Checked(Result<Option<UpdateInfo>, String>),
     Installed(Result<Next, InstallError>),
     Uploaded(Result<Uploaded, UploadError>),
     RetryBind,
@@ -186,25 +188,24 @@ impl App {
                     }
                 }
             }
-            menu::ID_UPDATE if !self.state.installing => {
-                let Some(u) = self.state.update.clone() else {
-                    return;
-                };
-                if u.download.is_none() {
-                    open(&u.url);
-                    return;
-                }
-                tracing::info!(version = %u.version, "installing update");
+            menu::ID_UPDATE => self.start_update(),
+            menu::ID_CHECK if !self.state.checking => {
                 let proxy = Mutex::new(self.proxy.clone());
-                let spawned = install::spawn(VERSION, u, move |r| {
+                let spawned = update::check_now(VERSION, move |r| {
                     let _ = proxy
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
-                        .send_event(UserEvent::Installed(r));
+                        .send_event(UserEvent::Checked(r));
                 });
                 match spawned {
-                    Ok(()) => self.state.installing = true,
-                    Err(e) => self.install_failed(&InstallError::Io("start the update", e)),
+                    Ok(()) => self.state.checking = true,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "cannot start checking for updates");
+                        dialog(
+                            "Check for updates",
+                            &format!("Could not check for updates: {e}"),
+                        );
+                    }
                 }
             }
             menu::ID_QUIT => {
@@ -213,6 +214,69 @@ impl App {
                 *control_flow = ControlFlow::Exit;
             }
             _ => {}
+        }
+    }
+
+    /// Install the offered update (or open its release page if the app cannot install it).
+    fn start_update(&mut self) {
+        if self.state.installing {
+            return;
+        }
+        let Some(u) = self.state.update.clone() else {
+            return;
+        };
+        if u.download.is_none() {
+            open(&u.url);
+            return;
+        }
+        tracing::info!(version = %u.version, "installing update");
+        let proxy = Mutex::new(self.proxy.clone());
+        let spawned = install::spawn(VERSION, u, move |r| {
+            let _ = proxy
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .send_event(UserEvent::Installed(r));
+        });
+        match spawned {
+            Ok(()) => self.state.installing = true,
+            Err(e) => self.install_failed(&InstallError::Io("start the update", e)),
+        }
+    }
+
+    /// Tell the user what "Check for updates" found, and offer to install a newer release.
+    fn on_checked(&mut self, r: Result<Option<UpdateInfo>, String>) {
+        self.state.checking = false;
+        match r {
+            Ok(Some(u)) => {
+                let action = if u.download.is_some() {
+                    "Update and restart now?"
+                } else {
+                    "Open the download page?"
+                };
+                let message = format!(
+                    "Version {} is available (this is v{VERSION}).\n\n{action}",
+                    u.version
+                );
+                self.state.update = Some(u);
+                self.refresh();
+                let answer = rfd::MessageDialog::new()
+                    .set_level(rfd::MessageLevel::Info)
+                    .set_title("Check for updates")
+                    .set_description(message)
+                    .set_buttons(rfd::MessageButtons::YesNo)
+                    .show();
+                if answer == rfd::MessageDialogResult::Yes {
+                    self.start_update();
+                }
+            }
+            Ok(None) => dialog(
+                "Check for updates",
+                &format!("NFC Browser Bridge v{VERSION} is the latest version."),
+            ),
+            Err(e) => dialog(
+                "Check for updates",
+                &format!("Could not check for updates: {e}"),
+            ),
         }
     }
 
@@ -416,6 +480,10 @@ fn main() {
             }
             Event::UserEvent(UserEvent::Update(u)) => {
                 app.state.update = Some(u);
+                app.refresh();
+            }
+            Event::UserEvent(UserEvent::Checked(r)) => {
+                app.on_checked(r);
                 app.refresh();
             }
             Event::UserEvent(UserEvent::Installed(r)) => {

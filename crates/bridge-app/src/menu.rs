@@ -11,6 +11,7 @@ pub const ID_AUTOSTART: &str = "autostart";
 pub const ID_LOGS: &str = "logs";
 pub const ID_UPLOAD: &str = "upload";
 pub const ID_UPDATE: &str = "update";
+pub const ID_CHECK: &str = "check-updates";
 pub const ID_QUIT: &str = "quit";
 
 /// Everything the app knows that the menu and icon depend on.
@@ -23,6 +24,8 @@ pub struct AppState {
     pub update: Option<UpdateInfo>,
     /// The update is being downloaded and installed.
     pub installing: bool,
+    /// "Check for updates" is in progress.
+    pub checking: bool,
     /// "Upload logs" is in progress.
     pub uploading: bool,
 }
@@ -37,6 +40,9 @@ pub struct MenuModel {
     pub autostart: bool,
     /// The update item's label and whether it can be clicked.
     pub update: Option<(String, bool)>,
+    /// "Check for updates" (`None` while an update is offered instead) and whether it can be
+    /// clicked.
+    pub check: Option<(String, bool)>,
     pub uploading: bool,
     pub icon: IconState,
     pub tooltip: String,
@@ -103,6 +109,11 @@ impl MenuModel {
                 // Nothing the app can install: the item opens the release page.
                 None => (format!("Update available: v{}", u.version), true),
             }),
+            check: match (&s.update, s.checking) {
+                (Some(_), _) => None,
+                (None, true) => Some(("Checking for updates…".into(), false)),
+                (None, false) => Some(("Check for updates".into(), true)),
+            },
             uploading: s.uploading,
             icon,
             tooltip,
@@ -134,6 +145,9 @@ impl MenuModel {
         })?;
         if let Some((label, enabled)) = &self.update {
             menu.append(&MenuItem::with_id(ID_UPDATE, label, *enabled, None))?;
+        }
+        if let Some((label, enabled)) = &self.check {
+            menu.append(&MenuItem::with_id(ID_CHECK, label, *enabled, None))?;
         }
         menu.append(&PredefinedMenuItem::separator())?;
         menu.append(&MenuItem::with_id(ID_QUIT, "Quit", true, None))?;
@@ -224,5 +238,21 @@ mod tests {
         s.installing = true;
         assert_eq!(label(&s), Some(("Updating to v1.0.8…".into(), false)));
         assert_eq!(label(&AppState::default()), None);
+    }
+
+    #[test]
+    fn check_item_until_an_update_is_offered() {
+        let check = |s: &AppState| MenuModel::from_state(s).check;
+        let mut s = AppState::default();
+        assert_eq!(check(&s), Some(("Check for updates".into(), true)));
+        s.checking = true;
+        assert_eq!(check(&s), Some(("Checking for updates…".into(), false)));
+        s.checking = false;
+        s.update = Some(UpdateInfo {
+            version: "1.0.10".into(),
+            url: "https://example.com/release".into(),
+            download: None,
+        });
+        assert_eq!(check(&s), None);
     }
 }

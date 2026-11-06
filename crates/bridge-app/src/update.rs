@@ -1,4 +1,5 @@
-//! Daily check of the latest GitHub release. Installing it is up to the user (see `install`).
+//! Check of the latest GitHub release: daily, and when the user asks. Installing it is up to the
+//! user (see `install`).
 
 use std::time::Duration;
 
@@ -97,25 +98,52 @@ fn check(current: &str) -> Result<Option<UpdateInfo>, ureq::Error> {
     }))
 }
 
+/// Check once and log the outcome. `Ok(None)`: up to date (or nothing released yet).
+fn check_logged(current: &str) -> Result<Option<UpdateInfo>, ureq::Error> {
+    match check(current) {
+        Ok(Some(info)) => {
+            tracing::info!(version = %info.version, "update available");
+            Ok(Some(info))
+        }
+        Ok(None) => {
+            tracing::debug!("up to date");
+            Ok(None)
+        }
+        Err(ureq::Error::StatusCode(404)) => {
+            tracing::debug!("no releases");
+            Ok(None)
+        }
+        Err(e) => {
+            tracing::info!(error = %e, "update check failed");
+            Err(e)
+        }
+    }
+}
+
 /// Check now and then daily on a background thread; `found` is called when a newer release exists.
 pub fn spawn(current: &'static str, found: impl Fn(UpdateInfo) + Send + 'static) {
     let _ = std::thread::Builder::new()
         .name("update-check".into())
         .spawn(move || {
             loop {
-                match check(current) {
-                    Ok(Some(info)) => {
-                        tracing::info!(version = %info.version, "update available");
-                        found(info);
-                    }
-                    Ok(None) => tracing::debug!("up to date"),
-                    // No release published yet.
-                    Err(ureq::Error::StatusCode(404)) => tracing::debug!("no releases"),
-                    Err(e) => tracing::info!(error = %e, "update check failed"),
+                if let Ok(Some(info)) = check_logged(current) {
+                    found(info);
                 }
                 std::thread::sleep(INTERVAL);
             }
         });
+}
+
+/// Check once on a background thread, for the user; `done` gets the newer release (`None`: up to
+/// date) or why the check failed.
+pub fn check_now(
+    current: &'static str,
+    done: impl FnOnce(Result<Option<UpdateInfo>, String>) + Send + 'static,
+) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name("update-check-now".into())
+        .spawn(move || done(check_logged(current).map_err(|e| e.to_string())))
+        .map(drop)
 }
 
 #[cfg(test)]
