@@ -255,17 +255,22 @@ This is a cheap safety net, not a security boundary.
 
 ## Reader recovery
 
-Where the bridge can see USB (macOS), it watches for two kinds of trouble:
+Where the bridge can see USB (macOS), it watches for three kinds of trouble:
 
 - **Missing:** a smart-card reader is on USB, but the smart-card service lists
   no usable reader (the kiosk would say "plug in the reader" while it is
   plugged in).
+- **Not reporting:** the macOS system log shows a failed USB transfer from a
+  reader followed by Apple's smart-card driver giving up on it ("Unable to send
+  IO"). The reader stays listed and still beeps at tags, but none are reported.
 - **Unresponsive:** a card held on a reader stops answering. The bridge checks
   held cards every 60 s; a card that fails is reset (powered off and on) first.
 
 A missing reader gets 5 s to show up (a replug takes about 1 s). Then the
 bridge reconnects to the smart-card service, and after 5 more seconds resets
-the reader over USB. An unresponsive card goes straight to the USB reset. If
+the reader over USB. A reader that is not reporting, or an unresponsive card,
+goes straight to the USB reset of that reader. A tag that was put on a reader
+while it was not reporting is announced with `card_present` once it is back. If
 the reader still does not work 10 s after a reset, it is reset once more, and
 after that `recovery` becomes `"failed"`: the reader needs unplugging and
 plugging back in. Replugging it, or the reader coming back by itself, returns

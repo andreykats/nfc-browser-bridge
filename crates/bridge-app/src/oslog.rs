@@ -1,17 +1,22 @@
 //! macOS only: copies the system log's lines about USB, the smart-card service and sleep/wake into
 //! `macos.YYYY-MM-DD.log` next to the bridge's own log (daily, 7 kept). macOS keeps its own log for
 //! only a day or two and never stores the informational lines, so they are gone by the time anyone
-//! looks into a reader that stopped working. Runs `log stream` and restarts it if it exits.
+//! looks into a reader that stopped working. Also hands every line to reader recovery, which spots
+//! a reader the USB driver stopped reading from (see `bridge_core::usb_log`). Runs `log stream` and
+//! restarts it if it exits.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use bridge_core::usb_log::UsbFaultLog;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
 /// The reader's USB connection (kernel), Apple's CCID driver and the driver host, smart-card
-/// service errors, and sleep/wake. Without the XPC chatter, which is ~2 lines per second.
+/// service errors, and sleep/wake. Without the XPC chatter, which is ~2 lines per second. Includes
+/// the kernel's and the driver's errors that `bridge_core::usb_log` looks for.
 const PREDICATE: &str = r#"NOT subsystem == "com.apple.xpc" AND (
     (process == "kernel" AND senderImagePath CONTAINS "IOUSBHost")
     OR process == "usbsmartcardreaderd"
@@ -36,35 +41,35 @@ const MAX_DELAY: Duration = Duration::from_secs(10 * 60);
 /// A stream that ran this long was healthy; the next restart starts again from `MIN_DELAY`.
 const STABLE: Duration = Duration::from_secs(60);
 
-/// Start copying the system log into `dir` in the background.
-pub fn spawn(dir: &Path) {
-    let appender = match RollingFileAppender::builder()
-        .rotation(Rotation::DAILY)
-        .filename_prefix("macos")
-        .filename_suffix("log")
-        .max_log_files(7)
-        .build(dir)
-    {
-        Ok(a) => a,
-        Err(e) => {
-            tracing::warn!(error = %e, "cannot open the macOS log file; not copying the system log");
-            return;
-        }
-    };
+/// Start reading the system log in the background: into `faults`, and copied into `dir` if given.
+/// Without a log file the faults are still read; recovery depends on them.
+pub fn spawn(dir: Option<&Path>, faults: Arc<UsbFaultLog>) {
+    let appender = dir.and_then(|dir| {
+        RollingFileAppender::builder()
+            .rotation(Rotation::DAILY)
+            .filename_prefix("macos")
+            .filename_suffix("log")
+            .max_log_files(7)
+            .build(dir)
+            .map_err(|e| {
+                tracing::warn!(error = %e, "cannot open the macOS log file; not copying the system log");
+            })
+            .ok()
+    });
     let spawned = std::thread::Builder::new()
         .name("os-log".into())
-        .spawn(move || run(appender));
+        .spawn(move || run(appender, &faults));
     if let Err(e) = spawned {
         tracing::warn!(error = %e, "cannot start copying the system log");
     }
 }
 
-fn run(mut out: RollingFileAppender) {
+fn run(mut out: Option<RollingFileAppender>, faults: &UsbFaultLog) {
     let mut delay = MIN_DELAY;
     let mut last_error = String::new();
     loop {
         let started = Instant::now();
-        match stream_once(&mut out) {
+        match stream_once(out.as_mut(), faults) {
             Ok(status) => {
                 tracing::warn!(%status, "the system log stream ended; restarting it");
             }
@@ -84,8 +89,11 @@ fn run(mut out: RollingFileAppender) {
     }
 }
 
-/// Copy lines until the stream ends. `Err` describes a stream that could not run.
-fn stream_once(out: &mut RollingFileAppender) -> Result<std::process::ExitStatus, String> {
+/// Read lines until the stream ends. `Err` describes a stream that could not run.
+fn stream_once(
+    mut out: Option<&mut RollingFileAppender>,
+    faults: &UsbFaultLog,
+) -> Result<std::process::ExitStatus, String> {
     let mut child = Command::new("/bin/sh")
         .args(["-c", WRAPPER, "sh", "/usr/bin/log", "stream"])
         .args([
@@ -113,7 +121,13 @@ fn stream_once(out: &mut RollingFileAppender) -> Result<std::process::ExitStatus
             Ok(_) => {
                 lines += 1;
                 // The first line repeats the filter; the second is the column header.
-                if lines > 2 && out.write_all(&line).is_err() {
+                if lines <= 2 {
+                    continue;
+                }
+                faults.feed(&String::from_utf8_lossy(&line));
+                if let Some(out) = out.as_deref_mut()
+                    && out.write_all(&line).is_err()
+                {
                     tracing::debug!("cannot write the macOS log file");
                 }
             }

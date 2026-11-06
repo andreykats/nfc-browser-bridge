@@ -7,6 +7,7 @@ use bridge_core::backend::{Disposition, PcscError};
 use bridge_core::fake::{ATR_ULTRALIGHT, FakeCard, FakePcsc, FaultOp, NtagType};
 use bridge_core::recovery::RecoveryConfig;
 use bridge_core::usb::{NoUsb, UsbControl};
+use bridge_core::usb_log::UsbFaultLog;
 use bridge_core::{Bridge, BridgeConfig};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -23,13 +24,27 @@ const UID_HEX: &str = "04699E22C01C90";
 
 type Ws = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
+/// The macOS system log's lines when the USB driver stopped reading from the production reader
+/// (2026-11-06).
+const KERNEL_ERROR: &str = "2026-11-05 19:47:46.571 E  kernel[0:a2af] [com.apple.usb:all] AppleUSBXHCIRequest: AppleUSBIORequest::complete: device 1 (ACR1255U-J1@00100000) endpoint 0x83: status 0xe00002ed (transaction error): 0 bytes transferred";
+const DRIVER_ERROR: &str = "2026-11-05 19:47:46.576 E  usbsmartcardreaderd[232:bc6] (IOUSBHost) Error: Unable to send IO. with reason: (null)";
+
 /// Fast recovery timings; cards are checked only when `probe` is set.
 fn config(usb: Arc<dyn UsbControl>, probe: Option<Duration>) -> BridgeConfig {
+    config_with_faults(usb, probe, Arc::new(UsbFaultLog::default()))
+}
+
+fn config_with_faults(
+    usb: Arc<dyn UsbControl>,
+    probe: Option<Duration>,
+    faults: Arc<UsbFaultLog>,
+) -> BridgeConfig {
     BridgeConfig {
         port: 0,
         version: "9.9.9".into(),
         recovery: RecoveryConfig {
             usb,
+            faults,
             tick: Duration::from_millis(20),
             missing_grace: Duration::from_millis(100),
             reopen_wait: Duration::from_millis(100),
@@ -894,5 +909,107 @@ async fn reset_readers_resets_every_usb_reader() {
     let mut ws = connect_ready(&bridge, |v| v["service"] == "ready").await;
     let r = request(&mut ws, json!({"id": 2, "type": "reset_readers"})).await;
     assert_eq!(r["error"]["code"], "unsupported");
+    bridge.shutdown();
+}
+
+/// No event matching `pred` within `wait`.
+async fn assert_quiet(ws: &mut Ws, wait: Duration, pred: impl Fn(&Value) -> bool) {
+    let deadline = tokio::time::Instant::now() + wait;
+    while let Ok(v) = tokio::time::timeout_at(deadline, recv(ws)).await {
+        assert!(!pred(&v), "unexpected: {v}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_reader_that_stopped_reporting_cards_is_reset_over_usb() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    let faults = Arc::new(UsbFaultLog::default());
+    let bridge = Bridge::start(
+        fake.clone(),
+        config_with_faults(Arc::new(fake.usb()), None, faults.clone()),
+        None,
+    )
+    .unwrap();
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R2) && v["recovery"] == "idle").await;
+
+    // The driver stops reading from the reader: a tag on it goes unseen.
+    fake.make_deaf(R2);
+    fake.insert_card(R2, FakeCard::ntag(NtagType::Ntag215, UID));
+    assert_quiet(&mut ws, Duration::from_millis(300), |v| {
+        v["event"] == "card_present"
+    })
+    .await;
+
+    // The system log says so.
+    faults.feed(KERNEL_ERROR);
+    faults.feed(DRIVER_ERROR);
+    let reset = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(reset["action"], "usb_reset");
+    assert_eq!(reset["readers"], json!([R2]));
+    let reason = reset["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("stopped reporting cards after a USB error on endpoint 0x83"),
+        "{reason}"
+    );
+    // The tag that went unseen is reported now: it was never announced, so it is a new tap.
+    let present = recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    assert_eq!(present["uid"], UID_HEX);
+    let back = recv_until(&mut ws, |v| v["event"] == "recovery").await;
+    assert_eq!(back["action"], "recovered");
+    assert_eq!(fake.usb_resets(), 1);
+
+    // Later taps work as usual, with no further resets.
+    fake.remove_card(R2);
+    recv_until(&mut ws, |v| v["event"] == "card_removed").await;
+    fake.insert_card(R2, FakeCard::ntag(NtagType::Ntag215, UID));
+    recv_until(&mut ws, |v| v["event"] == "card_present").await;
+    assert_eq!(fake.usb_resets(), 1);
+    bridge.shutdown();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn usb_errors_that_are_not_a_reader_fault_are_ignored() {
+    let fake = FakePcsc::new();
+    fake.add_reader(R2);
+    fake.plug_usb(R2);
+    let faults = Arc::new(UsbFaultLog::default());
+    let bridge = Bridge::start(
+        fake.clone(),
+        config_with_faults(Arc::new(fake.usb()), None, faults.clone()),
+        None,
+    )
+    .unwrap();
+    let mut ws = connect_ready(&bridge, |v| has_reader(v, R2) && v["recovery"] == "idle").await;
+    // Long enough for a fault to be confirmed and acted on.
+    let quiet = Duration::from_millis(1500);
+
+    // Another USB device (the kiosk's Ethernet adapter) failing a transfer.
+    faults.feed(&KERNEL_ERROR.replace("ACR1255U-J1@00100000", "USB 10/100/1000 LAN@01230000"));
+    faults.feed(DRIVER_ERROR);
+    // The reader unplugged: the same errors, but the device is torn down.
+    faults.feed("2026-11-06 13:25:39.772 Df kernel[0:6f7] [com.apple.usb:all] usb-drd0-port-hs@00100000: AppleUSBHostPort::terminateDevice: destroying 0x072f/223f/0204 (ACR1255U-J1): hardware connection lost");
+    faults.feed(DRIVER_ERROR);
+    faults.feed(KERNEL_ERROR);
+    faults.feed("2026-11-06 13:25:39.775 I  usbsmartcardreaderd[232:bc6] [com.apple.CryptoTokenKit:ccid] Device terminate");
+    // The driver's error alone.
+    faults.feed(DRIVER_ERROR);
+    assert_quiet(&mut ws, quiet, |v| v["event"] == "recovery").await;
+
+    // The bridge's own reset can fail transfers on the old attachment.
+    ws.send(Message::text(
+        json!({"id": 1, "type": "reset_readers"}).to_string(),
+    ))
+    .await
+    .unwrap();
+    recv_until(&mut ws, |v| v["id"] == 1).await;
+    faults.feed(KERNEL_ERROR);
+    faults.feed(DRIVER_ERROR);
+    assert_quiet(&mut ws, quiet, |v| {
+        v["event"] == "recovery" && v["reason"] != "requested by a client"
+    })
+    .await;
+    assert_eq!(fake.usb_resets(), 1);
     bridge.shutdown();
 }

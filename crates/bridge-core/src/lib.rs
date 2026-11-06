@@ -11,6 +11,7 @@ pub mod real;
 pub mod recovery;
 pub mod server;
 pub mod usb;
+pub mod usb_log;
 #[cfg(target_os = "macos")]
 mod usb_macos;
 pub mod worker;

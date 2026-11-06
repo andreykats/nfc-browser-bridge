@@ -8,12 +8,14 @@
 
 #![cfg(target_os = "macos")]
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use bridge_core::backend::{PcscBackend, PcscContext, PcscError, ReaderWatch, state};
 use bridge_core::real::RealPcsc;
 use bridge_core::recovery::RecoveryConfig;
 use bridge_core::usb::{self, UsbReader};
+use bridge_core::usb_log::{self, UsbFaultLog};
 use bridge_core::{Bridge, BridgeConfig};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -73,21 +75,30 @@ fn usb_reset_re_enumerates_the_reader_and_pcsc_drops_and_relists_it() {
         usb.reset(&reader).expect("USB reset");
         eprintln!("  reset returned after {:?}", started.elapsed());
 
-        let (mut new_id, mut left, mut back): (Option<u64>, Option<Duration>, Option<Instant>) =
-            (None, None, None);
+        // USB is watched on its own thread: listing it takes long enough to miss the service's
+        // ~20 ms drop-out if it ran between the waits below.
+        let watcher = {
+            let (usb, reader) = (usb.clone(), reader.clone());
+            std::thread::spawn(move || {
+                while started.elapsed() < BACK_WITHIN {
+                    if let Some(r) = usb
+                        .readers()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .find(|r| r.name == reader.name && r.id != reader.id)
+                    {
+                        eprintln!("  {:?}: on USB again as id {:#x}", started.elapsed(), r.id);
+                        return Some(r.id);
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                None
+            })
+        };
+        let (mut left, mut back): (Option<Duration>, Option<Instant>) = (None, None);
         while started.elapsed() < BACK_WITHIN
-            && !(new_id.is_some() && back.is_some_and(|b| b.elapsed() >= STABLE_FOR))
+            && !(watcher.is_finished() && back.is_some_and(|b| b.elapsed() >= STABLE_FOR))
         {
-            if new_id.is_none()
-                && let Some(r) = usb
-                    .readers()
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|r| r.name == reader.name && r.id != reader.id)
-            {
-                eprintln!("  {:?}: on USB again as id {:#x}", started.elapsed(), r.id);
-                new_id = Some(r.id);
-            }
             match ctx.get_status_change(WAIT, &mut watch) {
                 Ok(()) => {
                     let s = watch[0].event_state;
@@ -104,6 +115,7 @@ fn usb_reset_re_enumerates_the_reader_and_pcsc_drops_and_relists_it() {
                 Err(e) => panic!("waiting for {name} failed: {e}"),
             }
         }
+        let new_id = watcher.join().expect("USB watcher");
         assert!(
             new_id.is_some(),
             "{} did not re-enumerate on USB within {BACK_WITHIN:?}",
@@ -254,4 +266,179 @@ async fn reset_readers_brings_the_reader_back_with_its_tag_still_answering() {
         "recovery stepped in after a requested reset"
     );
     bridge.shutdown();
+}
+
+/// The macOS system log's lines when the USB driver stopped reading from the production reader
+/// (2026-11-06), for `reader` instead.
+fn usb_fault_lines(reader: &UsbReader) -> [String; 2] {
+    let location = reader
+        .identity
+        .location
+        .expect("macOS gives the reader's port");
+    // The kernel names the device by its USB product string, without the vendor.
+    let product = reader
+        .name
+        .split_once(' ')
+        .map_or(reader.name.as_str(), |(_, p)| p);
+    [
+        format!(
+            "2026-11-05 19:47:46.571 E  kernel[0:a2af] [com.apple.usb:all] AppleUSBXHCIRequest: AppleUSBIORequest::complete: device 1 ({product}@{location:08x}) endpoint 0x83: status 0xe00002ed (transaction error): 0 bytes transferred"
+        ),
+        "2026-11-05 19:47:46.576 E  usbsmartcardreaderd[232:bc6] (IOUSBHost) Error: Unable to send IO. with reason: (null)".into(),
+    ]
+}
+
+/// What the production kiosk needed on 2026-11-06, short of the fault itself (which cannot be
+/// caused on purpose): the driver's errors in the system log make the bridge reset that reader, and
+/// the reader comes back with its tag still answering and later taps reported.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a USB smart-card reader with a tag on it"]
+async fn a_usb_fault_in_the_system_log_resets_the_reader() {
+    let faults = Arc::new(UsbFaultLog::default());
+    let config = BridgeConfig {
+        port: 0,
+        version: "9.9.9".into(),
+        recovery: RecoveryConfig {
+            faults: faults.clone(),
+            ..RecoveryConfig::default()
+        },
+    };
+    let bridge = Bridge::start(RealPcsc, config, None).expect("start the bridge");
+    let mut ws = connect(bridge.local_addr().port()).await;
+    let find_tag = async {
+        loop {
+            let v = recv(&mut ws, Instant::now() + BACK_WITHIN).await;
+            if let Some(found) = reader_with_card(&v) {
+                break found;
+            }
+        }
+    };
+    let (reader, uid) = tokio::time::timeout(Duration::from_secs(10), find_tag)
+        .await
+        .expect("no tag on the reader: put one on it");
+    let usb_reader = usb_readers()
+        .into_iter()
+        .find(|u| u.matches(&reader))
+        .expect("the reader with the tag is on USB");
+    eprintln!("{reader}: tag {uid}; USB {}", usb_reader.identity);
+    let before = read_uid(&mut ws, 1, &reader).await;
+    assert_eq!(before["ok"], true, "the tag does not answer: {before}");
+
+    let started = Instant::now();
+    for line in usb_fault_lines(&usb_reader) {
+        faults.feed(&line);
+    }
+    let deadline = started + BACK_WITHIN;
+    let (mut reset, mut gone, mut back, mut recovered) = (false, false, false, false);
+    while !(reset && back && recovered) {
+        let v = recv(&mut ws, deadline).await;
+        let has_card = reader_with_card(&v).is_some_and(|(r, _)| r == reader);
+        match v["event"].as_str() {
+            Some("card_present") => panic!("the tag was announced again as a new tap: {v}"),
+            Some("recovery") if v["action"] == "usb_reset" => {
+                eprintln!("  reset after {:?}: {}", started.elapsed(), v["reason"]);
+                assert!(
+                    v["readers"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|r| r == usb_reader.name.as_str()),
+                    "{} was not reset: {v}",
+                    usb_reader.name
+                );
+                reset = true;
+            }
+            Some("recovery") if v["action"] == "recovered" => recovered = true,
+            Some("recovery") => panic!("unexpected recovery step: {v}"),
+            Some("card_removed") => gone = true,
+            Some("readers") if !has_card => gone = true,
+            Some("readers") if gone && has_card => {
+                eprintln!("  back with its tag after {:?}", started.elapsed());
+                back = true;
+            }
+            _ => {}
+        }
+    }
+    let after = read_uid(&mut ws, 2, &reader).await;
+    assert_eq!(
+        after["ok"], true,
+        "the tag does not answer after the reset: {after}"
+    );
+    assert_eq!(after["result"]["responses"], before["result"]["responses"]);
+
+    eprintln!("  lift the tag off the reader and put it back within 60 s");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let (mut lifted, mut tapped) = (false, false);
+    while !tapped {
+        let v = recv(&mut ws, deadline).await;
+        lifted |= v["event"] == "card_removed" && v["reader"] == reader.as_str();
+        tapped = lifted && v["event"] == "card_present" && v["reader"] == reader.as_str();
+    }
+    assert_eq!(
+        serde_json::to_value(bridge.status()).unwrap()["recovery"],
+        "idle"
+    );
+    bridge.shutdown();
+}
+
+/// Feeds the live system log into `faults` until dropped. Only the lines `usb_log` looks at.
+struct LiveLog(std::process::Child);
+
+impl LiveLog {
+    fn start(faults: Arc<UsbFaultLog>) -> Self {
+        use std::io::BufRead;
+        let mut child = std::process::Command::new("/usr/bin/log")
+            .args([
+                "stream",
+                "--style",
+                "compact",
+                "--level",
+                "info",
+                "--predicate",
+                r#"(process == "kernel" AND senderImagePath CONTAINS "IOUSBHost") OR process == "usbsmartcardreaderd""#,
+            ])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("run log stream");
+        let out = std::io::BufReader::new(child.stdout.take().unwrap());
+        std::thread::spawn(move || {
+            for line in out.lines().map_while(Result::ok) {
+                // The lines that matter, for the test output.
+                if ["AppleUSBIORequest", "Unable to send IO", "terminate"]
+                    .iter()
+                    .any(|k| line.contains(k))
+                {
+                    eprintln!("  log: {}", line.get(..200).unwrap_or(&line));
+                }
+                faults.feed(&line);
+            }
+        });
+        // log stream misses what is logged before it is connected.
+        std::thread::sleep(Duration::from_secs(1));
+        Self(child)
+    }
+}
+
+impl Drop for LiveLog {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+/// A USB reset logs the same two errors as the fault (ACR1255U-J1: transaction error on endpoint
+/// 0x83 and "Unable to send IO") along with the device's teardown; it must not count as a fault.
+#[test]
+#[ignore = "needs a USB smart-card reader"]
+fn a_usb_reset_in_the_live_system_log_is_not_a_fault() {
+    let usb = usb::system();
+    let faults = Arc::new(UsbFaultLog::default());
+    let _live = LiveLog::start(faults.clone());
+    for reader in usb_readers() {
+        eprintln!("{} (id {:#x}): {}", reader.name, reader.id, reader.identity);
+        usb.reset(&reader).expect("USB reset");
+    }
+    std::thread::sleep(usb_log::TEARDOWN_WINDOW + Duration::from_secs(2));
+    let found = faults.take();
+    assert!(found.is_empty(), "a reset was taken for a fault: {found:?}");
 }

@@ -2,7 +2,7 @@
 //! from an NTAG memory image, and failures can be injected. `FakeUsb` adds the readers' USB side:
 //! a reader can stay on USB while PC/SC loses it, and a USB reset brings it back.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -164,6 +164,9 @@ struct World {
     lost: Vec<(FakeReader, Option<Instant>)>,
     /// Readers whose cards answer every command with COMM_ERROR until a USB reset.
     unresponsive: HashSet<String>,
+    /// Readers whose state PC/SC no longer updates (cards come and go unseen) until a USB reset:
+    /// the state and ATR it keeps reporting.
+    deaf: HashMap<String, (u32, Vec<u8>)>,
     /// USB resets change the id but bring nothing back.
     usb_reset_broken: bool,
 }
@@ -376,6 +379,19 @@ impl FakePcsc {
         });
     }
 
+    /// PC/SC stops seeing cards come and go on `reader` until a USB reset, as when the USB driver
+    /// stops reading from it. The reader stays listed in its current state.
+    pub fn make_deaf(&self, reader: &str) {
+        self.changed(|w| {
+            let r = w.reader(reader).expect("no such fake reader");
+            let seen = (
+                r.raw_state(),
+                r.card.as_ref().map(|c| c.atr.clone()).unwrap_or_default(),
+            );
+            w.deaf.insert(reader.into(), seen);
+        });
+    }
+
     /// USB resets stop (or start again) bringing readers back.
     pub fn set_usb_reset_broken(&self, broken: bool) {
         self.changed(|w| w.usb_reset_broken = broken);
@@ -394,7 +410,7 @@ impl FakePcsc {
 }
 
 /// `UsbControl` over a `FakePcsc` world. A reset gives the device a new id, hides its reader from
-/// PC/SC for a moment, then lists it again (with any card on it) and clears `make_unresponsive`.
+/// PC/SC for a moment, then lists it again (with any card on it) and clears `make_unresponsive` and `make_deaf`.
 #[derive(Clone)]
 pub struct FakeUsb {
     world: Shared,
@@ -430,6 +446,7 @@ impl UsbControl for FakeUsb {
                 return Ok(());
             }
             w.unresponsive.remove(&name);
+            w.deaf.remove(&name);
             let back = Some(Instant::now() + USB_RESET_GAP);
             if let Some(lost) = w.lost.iter_mut().find(|(r, _)| r.name == name) {
                 lost.1 = back;
@@ -510,6 +527,7 @@ impl PcscContext for FakeContext {
                     }
                 } else {
                     match w.readers.iter().find(|r| r.name == watch.name) {
+                        Some(_) if w.deaf.contains_key(&watch.name) => w.deaf[&watch.name].clone(),
                         Some(r) => (
                             r.raw_state(),
                             r.card.as_ref().map(|c| c.atr.clone()).unwrap_or_default(),

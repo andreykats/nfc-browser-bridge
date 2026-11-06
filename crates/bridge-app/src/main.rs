@@ -20,6 +20,8 @@ use std::time::Duration;
 use bridge_core::health::Health;
 use bridge_core::protocol::DEFAULT_PORT;
 use bridge_core::real::RealPcsc;
+use bridge_core::recovery::RecoveryConfig;
+use bridge_core::usb_log::UsbFaultLog;
 use bridge_core::{Bridge, BridgeConfig, BridgeStatus, StartError, VERSION};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder, EventLoopProxy};
@@ -53,6 +55,8 @@ struct App {
     proxy: EventLoopProxy<UserEvent>,
     tray: Option<TrayIcon>,
     bridge: Option<Bridge<RealPcsc>>,
+    /// Reader faults from the system log (macOS), for whichever bridge runs.
+    faults: Arc<UsbFaultLog>,
     state: AppState,
     shown: Option<MenuModel>,
 }
@@ -68,7 +72,14 @@ impl App {
                 .unwrap_or_else(|e| e.into_inner())
                 .send_event(UserEvent::Status(s.clone()));
         });
-        let e = match Bridge::start(RealPcsc, BridgeConfig::default(), Some(listener)) {
+        let config = BridgeConfig {
+            recovery: RecoveryConfig {
+                faults: self.faults.clone(),
+                ..RecoveryConfig::default()
+            },
+            ..BridgeConfig::default()
+        };
+        let e = match Bridge::start(RealPcsc, config, Some(listener)) {
             Ok(b) => {
                 watchdog(b.health());
                 self.bridge = Some(b);
@@ -342,10 +353,9 @@ fn main() {
         supervisor::run();
     }
     tracing::info!(version = VERSION, "NFC Browser Bridge starting");
+    let faults = Arc::new(UsbFaultLog::default());
     #[cfg(target_os = "macos")]
-    if let Some(dir) = logging::log_dir() {
-        oslog::spawn(&dir);
-    }
+    oslog::spawn(logging::log_dir().as_deref(), faults.clone());
     autostart::refresh();
     install::cleanup();
     #[cfg(target_os = "macos")]
@@ -374,6 +384,7 @@ fn main() {
         proxy,
         tray: None,
         bridge: None,
+        faults,
         state: AppState {
             autostart: autostart::is_enabled(),
             ..Default::default()

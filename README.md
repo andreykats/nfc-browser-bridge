@@ -141,8 +141,9 @@ the websites currently connected.
   [Firebase console](https://console.firebase.google.com/project/logs-wvmye/storage).
   The app can only add files there; it cannot read, change or delete any.
 - **Reader plugged in but not working:** on macOS the bridge resets a reader
-  that is on USB but not listed by the smart-card service, or whose card stops
-  answering, as if it had been replugged (see
+  that is on USB but not listed by the smart-card service, that the system log
+  shows its USB driver stopped reading from (it beeps at tags but none are
+  reported), or whose card stops answering, as if it had been replugged (see
   [PROTOCOL.md](docs/PROTOCOL.md#reader-recovery)). If two resets do not help,
   the log says "it needs unplugging and plugging back in".
 - **"Port 38241 in use by another app":** another program listens on the

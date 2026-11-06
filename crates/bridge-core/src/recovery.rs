@@ -1,14 +1,16 @@
 //! Reader recovery: notices a reader that stopped working while still plugged in and brings it
 //! back without anyone unplugging it. Also logs USB changes and a periodic status line.
 //!
-//! Two kinds of trouble:
+//! Three kinds of trouble:
 //! - **Missing:** the reader is on USB but the smart-card service does not list it (the kiosk
 //!   shows "plug in the reader" although it is plugged in).
+//! - **Not reporting:** the system log shows that the reader's USB driver stopped reading from it
+//!   (see [`crate::usb_log`]). The reader is still listed but never reports a tag.
 //! - **Unresponsive:** a card held on the reader stopped answering, even after the worker reset it.
 //!
 //! The ladder: wait a moment (a replug or reset takes about a second to show up), reconnect to the
 //! smart-card service (missing only), reset the reader over USB, reset it once more, then give up
-//! and ask for a replug. Only platforms that can see USB (macOS) recover; elsewhere this thread
+//! and ask for a replug. A reader that is not reporting or unresponsive goes straight to the reset. Only platforms that can see USB (macOS) recover; elsewhere this thread
 //! still checks held cards and logs status.
 
 use std::fmt;
@@ -24,6 +26,7 @@ use crate::protocol::{
     BridgeError, ErrorCode, ReaderKind, RecoveryAction, RecoveryState, ServiceStatus, UsbReaderInfo,
 };
 use crate::usb::{UsbControl, UsbReader};
+use crate::usb_log::UsbFaultLog;
 use crate::worker::{Job, WorkerHandle};
 
 /// After the bridge resets readers, changes to their USB attachments within this time are its own
@@ -34,6 +37,8 @@ const STATUS_DELAY: Duration = Duration::from_secs(5);
 
 pub struct RecoveryConfig {
     pub usb: Arc<dyn UsbControl>,
+    /// Reader faults from the system log; the app feeds it on macOS.
+    pub faults: Arc<UsbFaultLog>,
     /// How often USB and the reader list are compared.
     pub tick: Duration,
     /// How long a reader may be missing before anything is done (a replug takes about 1 s).
@@ -54,6 +59,7 @@ impl Default for RecoveryConfig {
     fn default() -> Self {
         Self {
             usb: crate::usb::system(),
+            faults: Arc::new(UsbFaultLog::default()),
             tick: Duration::from_secs(1),
             missing_grace: Duration::from_secs(5),
             reopen_wait: Duration::from_secs(5),
@@ -68,6 +74,11 @@ impl Default for RecoveryConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Trouble {
     Missing,
+    /// The USB driver stopped reading from this reader (its USB name), for this reason.
+    NotReporting {
+        reader: String,
+        detail: String,
+    },
     /// The card on this reader stopped answering.
     Unresponsive(String),
 }
@@ -78,6 +89,10 @@ impl fmt::Display for Trouble {
             Self::Missing => {
                 f.write_str("the reader is on USB but the smart card service does not list it")
             }
+            Self::NotReporting { reader, detail } => write!(
+                f,
+                "{reader} stopped reporting cards after a USB error on {detail}"
+            ),
             Self::Unresponsive(r) => write!(f, "the card on {r} stopped answering"),
         }
     }
@@ -148,8 +163,9 @@ impl Ladder {
         };
         let (stage, action) = match self.stage {
             Stage::Idle => match trouble {
-                // The worker already reset an unresponsive card itself: go straight to USB.
-                Trouble::Unresponsive(_) => reset(1),
+                // Nothing short of re-enumerating fixes a reader the driver stopped reading from,
+                // and the worker already reset an unresponsive card itself: go straight to USB.
+                Trouble::NotReporting { .. } | Trouble::Unresponsive(_) => reset(1),
                 Trouble::Missing => (Stage::Noticed { since: now }, None),
             },
             Stage::Noticed { since } if now - since >= c.missing_grace => {
@@ -175,6 +191,9 @@ struct Inner {
     /// A reader whose card stopped answering (from the worker), until a check succeeds or the
     /// card leaves.
     unresponsive: Option<String>,
+    /// A reader (this USB attachment) the driver stopped reading from, and why, until it
+    /// re-enumerates.
+    not_reporting: Option<(UsbReader, String)>,
     /// USB changes before this time come from the bridge's own reset.
     resetting_until: Option<Instant>,
     /// USB readers at the last check (`None`: cannot see USB).
@@ -204,6 +223,7 @@ impl Recovery {
             inner: Mutex::new(Inner {
                 ladder: Ladder::default(),
                 unresponsive: None,
+                not_reporting: None,
                 resetting_until: None,
                 usb: None,
             }),
@@ -302,6 +322,24 @@ impl Recovery {
         {
             inner.unresponsive = None; // the card left
         }
+        // A reset or replug gives the reader a new attachment, with a working driver.
+        if let Some((r, _)) = &inner.not_reporting
+            && !usb.iter().any(|u| u.id == r.id)
+        {
+            inner.not_reporting = None;
+        }
+        for fault in self.config.faults.take() {
+            let reader = usb.iter().find(|u| fault.is_on(u));
+            if inner.resetting_until.is_some_and(|t| fault.at < t) {
+                // Tearing down the old attachment can fail transfers too.
+                tracing::info!(device = %fault.device, detail = %fault.detail, "USB error during the bridge's reset; ignored");
+            } else if let Some(reader) = reader {
+                tracing::warn!(reader = %reader.name, detail = %fault.detail, "the reader's USB driver stopped reading from it; tags will not be reported");
+                inner.not_reporting = Some((reader.clone(), fault.detail));
+            } else {
+                tracing::info!(device = %fault.device, detail = %fault.detail, "USB error on a device that is not a reader on USB now; ignored");
+            }
+        }
         let usable = status
             .readers
             .iter()
@@ -311,9 +349,15 @@ impl Recovery {
         let missing = status.service == ServiceStatus::Ready && !usb.is_empty() && usable == 0;
         let trouble = if missing {
             Some(Trouble::Missing)
+        } else if let Some((r, detail)) = &inner.not_reporting {
+            Some(Trouble::NotReporting {
+                reader: r.name.clone(),
+                detail: detail.clone(),
+            })
         } else {
             inner.unresponsive.clone().map(Trouble::Unresponsive)
         };
+        let not_reporting = inner.not_reporting.as_ref().map(|(r, _)| r.clone());
         let action = inner.ladder.step(now, trouble.as_ref(), &self.config);
         let state = inner.ladder.state();
         drop(inner);
@@ -338,6 +382,7 @@ impl Recovery {
                             matching
                         }
                     }
+                    Trouble::NotReporting { .. } => not_reporting.into_iter().collect(),
                     Trouble::Missing => usb.clone(),
                 };
                 let reason = format!("{t} (attempt {attempt} of {})", self.config.max_resets);
@@ -509,6 +554,25 @@ mod tests {
         // Back within the grace period: nothing was done, so nothing recovered either.
         assert_eq!(l.step(t0 + Duration::from_secs(2), None, &c), None);
         assert_eq!(l.state(), RecoveryState::Idle);
+    }
+
+    #[test]
+    fn a_reader_not_reporting_goes_straight_to_a_usb_reset() {
+        let c = config();
+        let mut l = Ladder::default();
+        let t0 = Instant::now();
+        let deaf = Trouble::NotReporting {
+            reader: "R".into(),
+            detail: "endpoint 0x83".into(),
+        };
+        assert_eq!(
+            l.step(t0, Some(&deaf), &c),
+            Some(Action::Reset { attempt: 1 })
+        );
+        assert_eq!(
+            l.step(t0 + Duration::from_secs(1), None, &c),
+            Some(Action::Recovered)
+        );
     }
 
     #[test]
