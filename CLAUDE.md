@@ -38,7 +38,7 @@ service (PC/SC) to web pages over a WebSocket at `ws://127.0.0.1:38241/v1`.
   (`install.rs`), log upload (`upload.rs`), macOS system-log copy
   (`oslog.rs`), and logging setup. `upload.rs` and `http.rs` are in the library,
   shared with `src/bin/staging-probe.rs`, the staging Mac mini's probe
-  (TESTING.md; installed by `packaging/staging/install.sh`).
+  (TESTING.md; run with `scripts/staging.sh`).
 - `client/`: zero-dependency TypeScript client (`client.ts`) with NDEF/NTAG
   helpers (`ndef.ts`, `ntag.ts`). `protocol.ts` mirrors docs/PROTOCOL.md exactly.
 - `web/`: the test site, published to GitHub Pages
@@ -96,10 +96,10 @@ docs/HARDWARE.md. Real-reader tests are ignored by default:
   reset every reader.
 - **Windows is not tested with real readers** until a later date. Don't
   describe Windows as tested; CI covers it with the fake reader only.
-- **Long-running test:** the staging Mac mini (`Mac-mini-F6E28B59`) runs the
-  latest release with `staging-probe` reading its tag every minute (TESTING.md).
-  Before dispatching a release run `scripts/staging-status.sh` and report its
-  result; on FAIL, find the cause before releasing.
+- **Long-running test:** on demand only, when the user asks. `scripts/staging.sh
+  start`, `status`, `stop` and `results` run it on the staging Mac mini
+  (TESTING.md). Releases don't need it. Never leave a run on that you started
+  without telling the user.
 - **Releases can't skip tests.** `release.yml` calls `ci.yml` and publishes
   only if it passes. Don't remove that dependency or publish any other way. A
   failure in the known-flaky Windows test (see Releases) is rerun, not

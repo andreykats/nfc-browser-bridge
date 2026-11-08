@@ -7,7 +7,7 @@ The bridge is tested at four levels:
 2. **Hardware tests:** they need a real reader on a Mac, and are required
    whenever reader code changes.
 3. **The release checklist:** done by hand on real machines.
-4. **A long-running test:** on a staging Mac mini.
+4. **A long-running test:** on a staging Mac mini, run on demand.
 
 The macOS version is the tested one. The Windows version is built, and its
 automated tests run on every push, but it **has not been tested with a real
@@ -22,7 +22,7 @@ reader** and won't be until a later release.
 | Hardware, Rust | 4 tests with a real reader | A Mac with a reader | When reader code changes |
 | Hardware, client | Read/write/erase on a real tag | A Mac with a reader and a tag | When tag or protocol code changes |
 | Release checklist | Install, replug, sleep, read/write, two tabs… | Real machines, by hand | Before major releases |
-| Long-running | The latest release running for days, read every minute | Staging Mac mini | All the time; checked before each release |
+| Long-running | The latest release running for hours or days, read every minute | Staging Mac mini | On demand: `scripts/staging.sh start` / `stop` |
 
 ## 1. Automated tests
 
@@ -197,81 +197,72 @@ Each check is marked done only after it has been seen working on a real
 machine. The Windows column stays empty until Windows testing with real
 readers begins.
 
-## 4. Long-running test (staging Mac mini)
+## 4. Long-running test (staging Mac mini, on demand)
 
-Some failures only show up after days of running. The production kiosk's
-reader once stopped reporting tags and stayed that way for 17.5 hours. The
-staging setup runs the bridge the way the kiosk does, all the time, so problems
-like that show up there too.
+Some failures only show up after hours or days of running. The production
+kiosk's reader once stopped reporting tags and stayed that way for 17.5 hours.
+A staging run puts the bridge through the same conditions as the kiosk for as
+long as you leave it on. **It runs only when asked**, and releases don't wait
+for it.
 
 - **Machine:** the Mac mini `Mac-mini.local` (macOS user `User`, Apple
   silicon), which uploads as `Mac-mini-F6E28B59`. It isn't the production
-  kiosk. Its address comes from DHCP (192.168.1.141 on 2026-11-08);
-  `dns-sd -G v4 Mac-mini.local` finds it. It has an ACR1255U-J1, the kiosk's
-  model, with a tag left on it.
-- **What it runs:** always the **latest release**, kept up to date by the
-  app's own updater, the same way as the kiosk. Staging doesn't hold back
-  releases; it finds problems alongside the kiosk, or before the kiosk
-  updates.
-- **The kiosk app:** it runs in Chrome against the bridge, as in production.
+  kiosk. Its address comes from DHCP (192.168.1.141 on 2026-11-08). It has an
+  ACR1255U-J1, the kiosk's model, with a tag left on it.
+- **What a run tests:** the bridge installed there, which is the latest
+  release (it updates itself like the kiosk), with the kiosk app running in
+  Chrome against it as in production.
 - **The probe:** [`staging-probe`](crates/bridge-app/src/bin/staging-probe.rs)
-  is a small program kept running by a LaunchAgent. It stays connected to the
-  bridge like the kiosk, and every minute it reads the tag (its UID and pages
-  4–7). It logs every result and every bridge event (recoveries, the tag
-  coming and going, lost connections) to
-  `~/Library/Logs/NFCBrowserBridgeStaging/probe.<UTC date>.log`.
-- **Daily summary:** once a UTC day is over, the probe writes
-  `summary.<date>.txt` and uploads it, with that day's probe log and the
-  bridge's own logs, to the logs bucket under
-  `nfc-browser-bridge/Mac-mini-F6E28B59/`. The summary gives:
+  runs during a run, under a LaunchAgent, so it survives restarts. It stays
+  connected to the bridge like the kiosk, and every minute it reads the tag
+  (its UID and pages 4–7). It logs every result and every bridge event
+  (recoveries, the tag coming and going, lost connections) to
+  `~/Library/Logs/NFCBrowserBridgeStaging/run.log`.
+- **The summary:** stopping a run summarises it. The summary and the run's log
+  are uploaded, with the bridge's own logs for those days, to the logs bucket
+  under `nfc-browser-bridge/Mac-mini-F6E28B59/`. The verdict is:
   - **FAIL:** a read failed, the bridge was unreachable, recovery gave up on
-    the reader, or no reads happened at all.
+    the reader, or no reads happened.
   - **WARN:** every read worked, but the bridge had to recover the reader, the
     connection dropped, or the tag came and went.
   - **PASS:** none of that.
 
-  The summary also lists the read count, failures by reason, read times and
-  events.
+  It also gives the read count (and how many were expected), failures by
+  reason, read times and events.
 - **What it can't catch directly:** with the tag resting on the reader there
   are no new taps, so a reader that stops reporting *new* taps (the 2026-11-06
   fault) doesn't fail a read. The bridge spots that fault in the macOS system
   log and resets the reader, and the summary shows it as recovery events
   (WARN).
 
-**Before every release** an agent runs:
+**Running it**, from a developer Mac with SSH key access to the Mac mini:
 
 ```sh
-scripts/staging-status.sh
+scripts/staging.sh start      # start a run; it keeps going until stopped
+scripts/staging.sh status     # is a run on, reads so far, latest entries
+scripts/staging.sh stop       # stop, upload, and print the summary
+scripts/staging.sh results    # the latest summary from the bucket (gcloud)
 ```
 
-It prints the latest summary. It exits 1 if that summary says FAIL or is more
-than two days old, and 2 if there is none. A FAIL means the cause is looked
-into before releasing.
+`STAGING_HOST` picks the Mac mini if `user@Mac-mini.local` doesn't reach it.
 
-**Setting up or updating the probe**, from a developer Mac:
+**Setting it up** (once, or after changing the probe):
 
 1. On the Mac mini, install the bridge from the latest release (README), with
    **Start at login** on. Put the reader on USB with a tag on it, and set up
    the kiosk app in Chrome as on the production kiosk.
-2. Give your Mac SSH key access to it once (asks for the Mac mini's password).
-   Use its IP address: `ssh` may try `Mac-mini.local`'s IPv6 address and fail.
-   Run it in Terminal, since macOS's Local Network privacy can block other
-   apps:
+2. Give your Mac SSH key access to the Mac mini. Run this in Terminal, because
+   macOS's Local Network privacy can block other apps, and use the IP address:
 
    ```sh
    ssh-copy-id -i ~/.ssh/id_rsa.pub user@192.168.1.141
    ```
 
-3. Build, copy and start the probe:
+3. Build and copy the probe (it restarts a run in progress):
 
    ```sh
-   packaging/staging/install.sh user@192.168.1.141
+   scripts/staging.sh install
    ```
-
-   It builds the probe for the Mac mini's CPU, installs it under
-   `~/Library/Application Support/NFCBrowserBridgeStaging/` with the
-   LaunchAgent `dev.drey.nfc-browser-bridge.staging-probe`, restarts it, and
-   shows its first log lines. Run it again after changing the probe.
 
 The bucket's rule that lets the probe add `probe.<date>.log` and
 `summary.<date>.txt` lives in the logs-bucket repo.

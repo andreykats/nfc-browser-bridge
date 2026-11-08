@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- The staging probe (TESTING.md), started at login and kept running. install.sh fills in
+<!-- The staging probe (TESTING.md), kept running during a run. scripts/staging.sh fills in
      __PROBE__ and __LOGS__. -->
 <plist version="1.0">
 <dict>
