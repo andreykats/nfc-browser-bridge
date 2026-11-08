@@ -24,16 +24,17 @@ straight away.
 
 ## Readers
 
-| Reader | Status |
-| --- | --- |
-| **ACS ACR1255U-J1** (connected by USB cable) | Tested on macOS |
-| **ACS ACR1552U** | Tested on macOS |
-| Other USB NFC readers that work with the computer's built-in smart-card support (PC/SC) | Should work, but not tested |
+| Reader | Mac | Windows |
+| --- | --- | --- |
+| **ACS ACR1255U-J1** (connected by USB cable) | Tested | Not tested yet |
+| **ACS ACR1552U** | Tested | Not tested yet |
+| Other USB NFC readers that work with the computer's built-in smart-card support (PC/SC) | Should work, but not tested | Should work, but not tested |
 
 - **Tested** means tags were read on a Mac, and the bridge's automatic reader
   recovery was checked with that reader.
 - **Windows:** the Windows version is built and released, but it hasn't been
-  tested with these readers yet.
+  tested with any reader yet. It also lacks some of the Mac version's features
+  (see [Mac and Windows](#mac-and-windows)).
 - **ACR1255U-J1:** use the USB cable. The bridge doesn't use the reader's
   Bluetooth connection. On a Mac no extra driver is needed.
 - **ACR1552U:** leave it in its factory "CCID" mode. Its keyboard mode, where
@@ -48,6 +49,21 @@ supported. Any card's ID (UID) can be read.
 - macOS 11 or later (Apple silicon or Intel), or Windows 10 or later (64-bit)
 - Google Chrome
 - One of the readers above, plugged in by USB
+
+## Mac and Windows
+
+The Mac version is the more complete one. It's the one in daily use, and it can
+fix a stuck reader by itself. The Windows version does the same basic job but
+can't do that yet.
+
+| | Mac | Windows |
+| --- | --- | --- |
+| Read and write tags, show tag IDs | Yes | Yes (not tested with a reader yet) |
+| Menu, start at login, updates, log upload | Yes | Yes |
+| Restart a tag that stops answering | Yes | Yes |
+| Notice a reader that beeps but reports nothing, and restart it | Yes | No: unplug and replug the reader |
+| Notice a reader that's plugged in but not seen, and restart it | Yes | No: unplug and replug the reader |
+| Computer's own USB and reader messages in the logs | Yes | No |
 
 ## Install
 
@@ -136,8 +152,8 @@ websites connected right now. Quit the bridge when you don't need it.
   [Allow the website in Chrome](#allow-the-website-in-chrome)).
 - **The reader beeps but nothing happens, or it stopped working:** on a Mac the
   bridge notices a reader that has stopped working and restarts it by itself
-  within a few seconds. If it can't, unplug the reader, wait a few seconds, and
-  plug it back in.
+  within a few seconds. If it can't, or on Windows, where the bridge can't do
+  this, unplug the reader, wait a few seconds, and plug it back in.
 - **"No reader connected":** plug the reader in. The bridge picks it up by
   itself, with no need to restart anything.
 - **"Port 38241 in use by another app":** another program is using the port the
