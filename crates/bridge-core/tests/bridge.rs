@@ -34,11 +34,26 @@ fn config(usb: Arc<dyn UsbControl>, probe: Option<Duration>) -> BridgeConfig {
     config_with_faults(usb, probe, Arc::new(UsbFaultLog::default()))
 }
 
+/// The bridge's log, at debug level. Test output is captured, so a failing test prints the
+/// log of its own run (the bridge's threads inherit the test's capture).
+fn init_logs() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "bridge_core=debug".into()),
+        )
+        .with_test_writer()
+        .with_ansi(false)
+        .with_thread_names(true)
+        .try_init();
+}
+
 fn config_with_faults(
     usb: Arc<dyn UsbControl>,
     probe: Option<Duration>,
     faults: Arc<UsbFaultLog>,
 ) -> BridgeConfig {
+    init_logs();
     BridgeConfig {
         port: 0,
         version: "9.9.9".into(),
