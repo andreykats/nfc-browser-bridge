@@ -2,8 +2,8 @@
 
 The bridge is tested at four levels:
 
-1. **Automated tests:** they run on every push and before every release, against
-   a simulated reader.
+1. **Automated tests:** they run on every push and in every release, against a
+   simulated reader.
 2. **Hardware tests:** they need a real reader on a Mac, and are required
    whenever reader code changes.
 3. **The release checklist:** done by hand on real machines.
@@ -17,12 +17,32 @@ reader** and won't be until a later release.
 
 | Level | What runs | Where | When |
 | --- | --- | --- | --- |
-| Automated, Rust | Format check, clippy, 74 tests incl. 26 end-to-end | GitHub Actions on macOS and Windows | Every push, and every release |
-| Automated, TypeScript | Type check, 48 client library tests, 4 test-site tests | GitHub Actions on Linux | Every push, and every release |
+| Automated, Rust | Format check, clippy, 82 tests incl. 26 end-to-end | GitHub Actions on macOS and Windows | Every push, and in every release |
+| Automated, TypeScript | Type check, 50 client library tests, 4 test-site tests | GitHub Actions on Linux | Every push, and in every release |
 | Hardware, Rust | 4 tests with a real reader | A Mac with a reader | When reader code changes |
 | Hardware, client | Read/write/erase on a real tag | A Mac with a reader and a tag | When tag or protocol code changes |
 | Release checklist | Install, replug, sleep, read/write, two tabs… | Real machines, by hand | Before major releases |
-| Long-running | The latest release running for hours or days, read every minute | Staging Mac mini | On demand: `scripts/staging.sh start` / `stop` |
+| Long-running | The latest release running for hours or days, read every minute | Staging Mac mini | When asked: `scripts/staging.sh start` / `stop` |
+
+### Automatic and on demand
+
+**Automatic:** only the automated tests. GitHub runs them on every push, and
+the release workflow runs them again on the commit it releases. Nothing is
+published unless they pass.
+
+**On demand:** everything that needs a real reader, a person, or a real outside
+service:
+
+| What | When it's required | Run by |
+| --- | --- | --- |
+| Rust hardware tests (one needs someone to lift and replace the tag) | Before committing or releasing a change to reader or recovery code | An agent, with someone plugging in a reader |
+| Client hardware test | After changes to tag, protocol or client code | An agent, with a reader and a tag |
+| The three ignored app tests (disk image install, GitHub over TLS, real bucket upload) | When that code changes | An agent |
+| Staging run | Only when asked; releases don't wait for it | An agent, with `scripts/staging.sh` |
+| Release checklist | Before major releases | A person |
+
+CLAUDE.md makes the required ones mandatory for agents: if no reader is
+available, a reader change stays uncommitted.
 
 ## 1. Automated tests
 
@@ -76,7 +96,8 @@ tests.
 
 These 26 tests start the whole bridge (monitor, worker, recovery, WebSocket
 server) on top of the fakes and talk to it with a real WebSocket client, the
-way a web page does.
+way a web page does. When one fails, it prints the bridge's own debug log for
+that test, so a failure in CI shows what the bridge was doing.
 
 | Area | Tests |
 | --- | --- |
@@ -85,10 +106,20 @@ way a web page does.
 | Smart-card service | Recovers after the service stops; persistent errors re-establish the context; a hung card call is reported as a stall |
 | Security and protocol | Request validation and the write guard (NTAG pages 0–3); oversized messages close the connection; the Host header and path are checked |
 | Clients | Two clients share events, and their batches don't interleave; the port being in use is reported |
-| USB recovery (macOS logic) | USB readers and recovery state are reported; a reader lost by PC/SC is reset over USB; recovery gives up after two resets and starts over on replug; an unresponsive card is reset over USB without a new tap; "reset readers" resets every USB reader; a reader that stopped reporting cards is reset; USB errors that aren't a reader fault are ignored |
+| USB recovery (macOS logic) | USB readers and recovery state are reported; a reader lost by PC/SC is reset over USB; recovery gives up after two resets and starts over on replug; an unresponsive card is reset over USB without a new tap; "reset readers" resets every USB reader; a reader that stopped reporting cards is reset; USB errors that aren't a reader fault are ignored; readers a client resets get time to come back before recovery steps in |
 
-`an_unresponsive_card_is_reset_over_usb_without_a_new_tap` depends on timing
-and sometimes fails on the Windows runner. Rerun the failed job; don't skip it.
+**Flaky tests.** `an_unresponsive_card_is_reset_over_usb_without_a_new_tap`
+depends on timing and sometimes fails on the Windows runner; rerun the failed
+job, and don't skip it. Any other intermittent failure gets its cause found,
+from the bridge log the test prints, and fixed. On 2026-11-08 two such failures
+on the macOS runner turned out to be:
+
+- a real recovery bug: after a reset a client asked for, the bridge didn't
+  give the reader time to come back
+- a test that assumed one order for two events sent from different threads
+
+Tests must not depend on the order of events that come from different threads,
+or on timings tighter than a slow CI machine can keep.
 
 ### Unit tests
 
@@ -97,23 +128,24 @@ and sometimes fails on the Windows runner. Rerun the failed job; don't skip it.
 | File | What's tested |
 | --- | --- |
 | `protocol.rs` | Hex encoding, reader kinds, parsing requests, APDU validation, the write guard, how errors and status are sent |
-| `recovery.rs` | The recovery ladder for a missing reader; a short gap isn't treated as trouble; a silent reader or an unresponsive card goes straight to a USB reset |
+| `recovery.rs` | The recovery ladder for a missing reader; a short gap isn't treated as trouble; readers a client resets get time to come back; a silent reader or an unresponsive card goes straight to a USB reset |
 | `usb_log.rs` | Parsing the kernel's USB transfer error; a fault needs both the kernel and driver lines, in either order, with no teardown nearby; a reader going away isn't a fault; matching the reader by port, else by name |
 | `usb.rs` | Matching USB readers to PC/SC names; describing a reader's identity for the log |
 | `real.rs` | Error codes and state bits match the `pcsc` crate |
 | `health.rs` | Only long calls are reported as stalls |
 | `server.rs` | How connecting websites are labelled |
 
-**`bridge-app`** (the tray app):
+**`bridge-app`** (the tray app, and the staging probe):
 
 | File | What's tested |
 | --- | --- |
 | `install.rs` | The release key parses; signatures verify while copying; a signature from another key, or one naming another version or file, is rejected; the Windows setup command; swapping app folders; finding the bundle |
 | `update.rs` | Version comparison; finding the installer and its signature in a release |
-| `upload.rs` | Log file names; the upload folder name; machine names; reading the hardware UUID; large files keep their last whole lines; only log files are listed |
+| `upload.rs` (shared with the staging probe) | Log file names; the upload folder name; machine names; reading the hardware UUID; large files keep their last whole lines; only log files are listed |
 | `menu.rs` | Menu contents for ready-with-card, no reader, port conflict, an update on offer, and Check for updates |
 | `autostart.rs` | Start-at-login entries, and refusing temporary locations |
 | `icons.rs` | Icon sizes and states; on the wide macOS canvas the card fills the target height and all states match |
+| `bin/staging-probe.rs` | How each read's answer is logged; PASS, WARN and FAIL verdicts; failure runs and reasons; reads expected for a run's length; timestamps and dates; naming the upload by the run's bridge version |
 
 Three tests here are ignored by default because they reach outside the
 machine or change real files. Run them by hand when that code changes:
@@ -124,7 +156,7 @@ machine or change real files. Run them by hand when that code changes:
 
 ### TypeScript tests
 
-**`client/`**, the library websites use (48 tests):
+**`client/`**, the library websites use (50 tests):
 
 | File | What's tested |
 | --- | --- |
@@ -175,8 +207,12 @@ this. If no reader is available, the change stays uncommitted until one is.
 **Caution:** the Rust hardware tests reset every reader on USB. Never run them
 on the production kiosk while it's in use.
 
-The last full run (2026-11-06, macOS, ACR1255U-J1 and ACR1552U, NTAG215)
-passed. [docs/HARDWARE.md](docs/HARDWARE.md) keeps the record of results.
+Last runs, all four Rust tests passing:
+
+- **2026-11-08:** macOS, ACR1255U-J1, NTAG215, after the reset fix.
+- **2026-11-06:** ACR1255U-J1 and ACR1552U, NTAG215.
+
+[docs/HARDWARE.md](docs/HARDWARE.md) keeps the record of results.
 
 ## 3. Release checklist (by hand)
 
@@ -218,8 +254,9 @@ for it.
   (its UID and pages 4–7). It logs every result and every bridge event
   (recoveries, the tag coming and going, lost connections) to
   `~/Library/Logs/NFCBrowserBridgeStaging/run.log`.
-- **The summary:** stopping a run summarises it. The summary and the run's log
-  are uploaded, with the bridge's own logs for those days, to the logs bucket
+- **The summary:** stopping a run summarises it, and the run's log is kept on
+  the Mac mini as `run.<start time>.log`. The summary and the run's log are
+  uploaded, with the bridge's own logs for those days, to the logs bucket
   under `nfc-browser-bridge/Mac-mini-F6E28B59/`. The verdict is:
   - **FAIL:** a read failed, the bridge was unreachable, recovery gave up on
     the reader, or no reads happened.
@@ -238,6 +275,7 @@ for it.
 **Running it**, from a developer Mac with SSH key access to the Mac mini:
 
 ```sh
+scripts/staging.sh install    # build and copy the probe (after changing it)
 scripts/staging.sh start      # start a run; it keeps going until stopped
 scripts/staging.sh status     # is a run on, reads so far, latest entries
 scripts/staging.sh stop       # stop, upload, and print the summary
@@ -245,6 +283,8 @@ scripts/staging.sh results    # the latest summary from the bucket (gcloud)
 ```
 
 `STAGING_HOST` picks the Mac mini if `user@Mac-mini.local` doesn't reach it.
+If an earlier run was never stopped, `start` finishes it first. The first
+run, on 2026-11-08, read the tag 3 times out of 3 in 2 minutes (PASS).
 
 **Setting it up** (once, or after changing the probe):
 
