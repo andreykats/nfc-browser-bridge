@@ -4,6 +4,12 @@ The newest version is at the top. To update, open the bridge's menu (the menu
 bar on a Mac, the system tray on Windows) and choose **Update to … and
 restart** when it appears, or **Check for updates** to look right away.
 
+## 1.0.11
+
+- On a Mac, the menu bar icon is bigger and now matches the size of the other
+  icons next to it. When no reader is connected, the icon shows an X inside
+  the card instead of a line through it.
+
 ## 1.0.10
 
 - **Check for updates** is new in the menu. It looks for a newer version right
