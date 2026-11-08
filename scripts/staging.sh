@@ -28,8 +28,18 @@ remote() {
     }
 }
 
+# Whether a run is on. Stops the script if the Mac mini can't be reached, rather than answering no.
 running() {
-    remote "launchctl print gui/\$(id -u)/$label >/dev/null 2>&1"
+    local status=0
+    ssh "${ssh_opts[@]}" "$host" "launchctl print gui/\$(id -u)/$label >/dev/null 2>&1" || status=$?
+    case $status in
+        0) return 0 ;;
+        255)
+            echo "Cannot reach $host over SSH (is it on? TESTING.md)." >&2
+            exit 1
+            ;;
+        *) return 1 ;;
+    esac
 }
 
 install() {
