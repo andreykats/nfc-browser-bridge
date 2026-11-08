@@ -35,8 +35,13 @@ straight away.
 - **Windows:** the Windows version is built and released, but it hasn't been
   tested with any reader yet. It also lacks some of the Mac version's features
   (see [Mac and Windows](#mac-and-windows)).
+- **Drivers:** the bridge uses the generic smart-card reader driver that comes
+  with the operating system, not the drivers the reader's manufacturer (ACS)
+  publishes. The readers above were tested only with the driver built into
+  macOS, and the bridge's automatic reader recovery is built around it. You
+  don't need to install anything extra for the reader.
 - **ACR1255U-J1:** use the USB cable. The bridge doesn't use the reader's
-  Bluetooth connection. On a Mac no extra driver is needed.
+  Bluetooth connection.
 - **ACR1552U:** leave it in its factory "CCID" mode. Its keyboard mode, where
   the reader types the card number, isn't what the bridge uses.
 - **Readers that only work as a keyboard** don't work with the bridge.
