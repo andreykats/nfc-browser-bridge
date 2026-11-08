@@ -31,6 +31,11 @@ jobs:
       - name: Check release notes
         run: scripts/release-notes.sh "${{ steps.v.outputs.version }}"
 
+  # The same checks as CI, on the commit being released. Nothing is published
+  # unless they pass.
+  tests:
+    uses: ./.github/workflows/ci.yml
+
   macos:
     needs: version
     runs-on: macos-latest
@@ -97,7 +102,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [version, macos, windows]
+    needs: [version, tests, macos, windows]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
