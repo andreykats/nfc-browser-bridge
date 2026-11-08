@@ -25,10 +25,10 @@ Tools:
 
 | Question | ACR1255U-J1 (USB) | ACR1552U |
 | --- | --- | --- |
-| PC/SC reader name(s) | `ACS ACR1255U-J1` (one slot, no PICC/SAM suffix) | _not yet tested_ |
-| Driver | Apple's own CCID driver (`usbsmartcardreaderd`) works; no ACS driver needed | _not yet tested_ |
+| PC/SC reader name(s) | `ACS ACR1255U-J1` (one slot, no PICC/SAM suffix) | `ACS ACR1552 1S CL Reader PICC` and `… SAM` (two slots; the SAM slot follows a few ms after PICC) |
+| Driver | Apple's own CCID driver (`usbsmartcardreaderd`) works; no ACS driver needed | Apple's own CCID driver works (fw 1.06, 2026-11-06) |
 | HID + CCID together | n/a | _not yet tested_ |
-| UID format | `FF CA` → `04699E22C01C90` (7 bytes, 14 hex chars) | _not yet tested_ |
+| UID format | `FF CA` → `04699E22C01C90` (7 bytes, 14 hex chars) | Same: NTAG215 `045B87B2961291` |
 | Idle behaviour | see "Idle card power-down" below | _not yet tested_ |
 
 NTAG215 seen: ATR `3B8F8001804F0CA0000003060300030000000068` (PC/SC Part 3
@@ -104,6 +104,12 @@ NTAG213, NTAG215 and NTAG216 cards.
 | 6 | Quit and relaunch the bridge with the page open: the client reconnects and does not replay "card present" | | |
 | 7 | Leave the ACR1255U-J1 idle for 30 minutes, then tap | | |
 | 8 | GitHub Pages site in Chrome, incl. the "Apps on device" permission prompt | | |
+
+USB reset and recovery (macOS, 2026-11-06): the ignored hardware tests in
+`crates/bridge-core/tests/hardware.rs` passed with both the ACR1255U-J1 and the
+ACR1552U and an NTAG215. They cover re-enumeration, the reader coming back with
+its tag still answering, a logged USB fault leading to a reset, and a real
+reset not being taken for a fault.
 
 Partial results so far (macOS, ACR1255U-J1, NTAG215 only, built from source):
 read/write/full-capacity/erase verified with the hardware test; tray menu,

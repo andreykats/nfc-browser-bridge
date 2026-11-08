@@ -1,198 +1,167 @@
 # NFC Browser Bridge
 
-Desktop Chrome cannot talk to USB smart-card (CCID) NFC readers directly: WebUSB
-blocks the smart-card class and the Web Smart Card API only ships on ChromeOS.
-NFC Browser Bridge is a small menu-bar (macOS) / system-tray (Windows) app that
-exposes the operating system's smart-card service (PC/SC) to web pages over a
-local WebSocket.
+NFC Browser Bridge is a small app that lets websites in Google Chrome use an NFC
+reader plugged into your computer. It sits in the menu bar on a Mac or the
+system tray on Windows, starts when you log in, and runs quietly in the
+background.
 
-- It reports readers and cards (UID, ATR) and passes raw APDUs through.
-- All NTAG/NDEF logic lives in the TypeScript client in [`client/`](client/).
-- One `.app` on macOS, one `.exe` on Windows; no runtimes to install.
+Chrome can't talk to USB NFC readers on its own. The bridge connects the two:
+when you tap an NFC tag or card on the reader, the website you have open sees it
+straight away.
 
-Supported readers: **ACS ACR1552U** and **ACS ACR1255U-J1** over USB. Other
-PC/SC contactless readers that support the PC/SC Part 3 storage-card commands
-(`FF CA`, `FF B0`, `FF D6`) are likely to work.
+## What it's used for
 
-## How a page connects
+- **Video kiosks:** the [Kiosk](https://github.com/andreykats/kiosk-video-nfc)
+  app plays a video when someone taps a card on the reader. With the bridge,
+  taps work even when the kiosk window isn't in front, and the kiosk can read
+  the card ID stored on the tag.
+- **Reading and writing NFC tags in the browser:** the
+  [test site](https://andreykats.github.io/nfc-browser-bridge/) shows the
+  readers and tags the bridge sees, and can read, write and erase tags (web
+  links, text, and other data).
+- **Your own web pages:** any website can use the reader through the bridge
+  while it runs (see [Security](#security)).
 
-```ts
-import { BridgeClient } from "./client/src/client";
-import { readNdef, matchKey } from "./client/src/ntag";
+## Readers
 
-const bridge = new BridgeClient(); // ws://127.0.0.1:38241/v1
-bridge.on("card_present", async ({ reader, uid, atr }) => {
-  const { records } = await readNdef(bridge, reader, atr);
-  console.log(uid, matchKey(records));
-});
-bridge.connect();
-```
+| Reader | Status |
+| --- | --- |
+| **ACS ACR1255U-J1** (connected by USB cable) | Tested on macOS |
+| **ACS ACR1552U** | Tested on macOS |
+| Other USB NFC readers that work with the computer's built-in smart-card support (PC/SC) | Should work, but not tested |
 
-The wire protocol is documented in [docs/PROTOCOL.md](docs/PROTOCOL.md). The
-test site in [`web/`](web/) exercises everything: live readers, NDEF read and
-write (URI, Text, MIME, several records per message), erase, and a raw APDU
-console.
+- **Tested** means tags were read on a Mac, and the bridge's automatic reader
+  recovery was checked with that reader.
+- **Windows:** the Windows version is built and released, but it hasn't been
+  tested with these readers yet.
+- **ACR1255U-J1:** use the USB cable. The bridge doesn't use the reader's
+  Bluetooth connection. On a Mac no extra driver is needed.
+- **ACR1552U:** leave it in its factory "CCID" mode. Its keyboard mode, where
+  the reader types the card number, isn't what the bridge uses.
+- **Readers that only work as a keyboard** don't work with the bridge.
+
+**Tags:** NFC Forum Type 2 tags. NTAG215 was tested; NTAG213 and NTAG216 are
+supported. Any card's ID (UID) can be read.
+
+## Requirements
+
+- macOS 11 or later (Apple silicon or Intel), or Windows 10 or later (64-bit)
+- Google Chrome
+- One of the readers above, plugged in by USB
 
 ## Install
 
-### macOS
+### Mac
 
-1. Download [NFC-Browser-Bridge-macos.dmg](https://github.com/andreykats/nfc-browser-bridge/releases/latest/download/NFC-Browser-Bridge-macos.dmg)
-   from the latest release and drag
-   **NFC Browser Bridge** to **Applications**. Start it from Applications, not
-   from the disk image, or "Start at login" cannot turn on.
-2. The build is not signed by Apple, so the first launch is blocked. Open
-   **System Settings → Privacy & Security**, scroll to the message about
-   NFC Browser Bridge and click **Open Anyway**. Updates installed from the
-   menu (see [Updates](#updates)) don't ask again; a DMG downloaded by hand does.
-3. A card icon appears in the menu bar. **Start at login** turns on by itself
-   the first time the app runs from Applications; it can be turned off in the
-   menu and stays off.
+1. Download
+   [NFC-Browser-Bridge-macos.dmg](https://github.com/andreykats/nfc-browser-bridge/releases/latest/download/NFC-Browser-Bridge-macos.dmg),
+   open it, and drag **NFC Browser Bridge** into **Applications**. Start it from
+   Applications, not from the disk image, or it can't start by itself when you
+   log in.
+2. The first time, macOS blocks it because it isn't signed by Apple yet. Open
+   **System Settings → Privacy & Security**, scroll down to the message about
+   NFC Browser Bridge and click **Open Anyway**. You only need to do this once.
+   Updates from the bridge's menu don't ask again.
+3. A card icon appears in the menu bar. **Start at login** turns on by itself.
 
 ### Windows
 
-1. Download [NFC-Browser-Bridge-windows-setup.exe](https://github.com/andreykats/nfc-browser-bridge/releases/latest/download/NFC-Browser-Bridge-windows-setup.exe)
-   from the latest release and run it. No administrator rights are needed.
-2. The installer is not signed, so SmartScreen warns about it: choose
-   **More info → Run anyway**.
-3. "Start at login" is selected by default in the installer and can be changed
-   later from the tray menu.
-4. Windows hides new tray icons in the overflow area. Drag the card icon onto
-   the taskbar (or enable it under Settings → Personalization → Taskbar → Other
-   system tray icons) so it stays visible.
+1. Download
+   [NFC-Browser-Bridge-windows-setup.exe](https://github.com/andreykats/nfc-browser-bridge/releases/latest/download/NFC-Browser-Bridge-windows-setup.exe)
+   and run it. You don't need administrator rights.
+2. Windows may warn that the installer is unrecognised: choose **More info →
+   Run anyway**.
+3. **Start at login** is ticked in the installer. You can change it later in the
+   bridge's menu.
+4. Windows hides new tray icons. Drag the card icon from the **^** area onto the
+   taskbar so it stays visible.
 
-### Updates
+### Allow the website in Chrome
 
-The app checks GitHub for a newer release at launch and then daily, and when
-**Check for updates** in the menu is clicked (it says whether one was found and
-offers to install it). When one exists, the menu shows **Update to vX.Y.Z and
-restart** in its place. Clicking it downloads
-the installer for this platform, checks its signature against the release key
-built into the app, installs it and restarts:
+The first time a website uses the bridge, Chrome asks whether it may connect to
+**apps on this device**. Choose **Allow**. If you chose Block by mistake, click
+the icon to the left of the web address, set **Apps on device** to **Allow**,
+and reload the page.
 
-- **macOS:** the app in Applications is replaced with the one in the new DMG.
-  The account needs write access to the folder the app is in (admin accounts
-  have it for Applications).
-- **Windows:** the setup runs silently with the options of the first install,
-  then starts the app again. Its log is `update-install.log` in the log folder.
+IT administrators can allow a website for everyone with the Chrome policy
+`LoopbackNetworkAllowedForUrls` (Chrome 146 and later; earlier versions use
+`LocalNetworkAccessAllowedForUrls`). On Windows that's the registry value
+`HKLM\SOFTWARE\Policies\Google\Chrome\LoopbackNetworkAllowedForUrls\1 =
+"https://example.com"`; on a Mac, a configuration profile for
+`com.google.Chrome` with that key set to a list of website addresses.
 
-The bridge is unavailable for a few seconds while it restarts. If the update
-can't be installed, a dialog says why and offers the release page instead.
+## The menu
 
-## Reader setup
+Click the card icon to see:
 
-- **ACR1552U:** the factory "CCID only" mode is what the bridge needs.
-  Whether "HID Keyboard + CCID Reader" mode also works alongside the bridge is
-  still to be confirmed on Windows; see [docs/HARDWARE.md](docs/HARDWARE.md).
-- **ACR1255U-J1:** connect it with the USB cable. On macOS it works with the
-  built-in driver.
+- **Status:** whether the bridge is ready, each reader that's plugged in, and
+  the ID of the tag on it (or "waiting…").
+- **Clients:** the websites using the bridge right now.
+- **Start at login:** start the bridge when you log in.
+- **Open log folder** and **Upload logs:** for troubleshooting (see below).
+- **Check for updates:** look for a newer version now. When one is available,
+  this item becomes **Update to … and restart**.
+- **Quit:** stop the bridge. Websites can't use the reader until you open it
+  again.
 
-## Chrome permission ("Apps on device")
+The icon also shows the status at a glance: no reader, ready, or a tag on the
+reader.
 
-Chrome asks each website once for permission to connect to apps on this device
-(the `loopback-network` permission of
-[Local Network Access](https://wicg.github.io/local-network-access/)). Choose
-**Allow**. The grant is kept per Chrome profile; a fresh `--user-data-dir`
-starts without it. If you blocked it: site settings (icon left of the address
-bar) → **Apps on device** → Allow, then reload.
+## Updates
 
-Managed machines can skip the prompt with the Chrome policy
-`LoopbackNetworkAllowedForUrls` (Chrome 146+; `LocalNetworkAccessAllowedForUrls`
-on older versions):
+The bridge checks for a new version when it starts and once a day. When there
+is one, the menu shows **Update to … and restart**. Click it, and the bridge
+downloads the update, checks that it really comes from us, installs it and
+restarts. The reader is unavailable for a few seconds while it does. If the
+update can't be installed, a message explains why and offers the download page.
 
-- **Windows** (registry, per machine):
-  ```
-  HKLM\SOFTWARE\Policies\Google\Chrome\LoopbackNetworkAllowedForUrls
-    1 = "https://example.com"
-  ```
-- **macOS:** a configuration profile for the `com.google.Chrome` domain with
-  `LoopbackNetworkAllowedForUrls` set to an array containing
-  `https://example.com`.
+On a Mac, installing an update needs permission to change the Applications
+folder, which administrator accounts have.
 
-Pages on `http://localhost` never see the prompt, so test the real flow on the
-published site.
+What changed in each version: [CHANGELOG.md](CHANGELOG.md).
 
-## Security note
+## Security
 
-While the bridge runs, **any website you open can use the NFC reader**: list
-readers, read card UIDs, and read or write cards. The bridge refuses writes to
-NTAG pages 0–3 (UID, lock bytes, capability container) unless a request sets
-`unsafe: true`, which prevents the most damaging mistakes, but it is not a
-security boundary. Quit the bridge when you do not need it. The tray menu lists
-the websites currently connected.
+While the bridge runs, **any website you open in Chrome can use the NFC
+reader**. It can see which readers are plugged in, read tags, and write to
+them. The bridge refuses the most damaging writes (to the parts of a tag that
+can make it unusable), but that's a safety net, not a lock. The menu lists the
+websites connected right now. Quit the bridge when you don't need it.
 
 ## Troubleshooting
 
-- **Logs:** tray menu → **Open log folder**.
-  macOS: `~/Library/Logs/NFCBrowserBridge/`;
-  Windows: `%LOCALAPPDATA%\NFCBrowserBridge\logs\`.
-  Daily files, last 7 kept. Start the app with `RUST_LOG=debug` to log APDUs.
-  - `bridge.*.log`: readers and cards coming and going, reader states,
-    recovery steps, and a `status` line every 10 minutes. On macOS a reader
-    arriving on USB is logged with its USB IDs, firmware release, serial
-    number and port, so the log shows which unit was in use.
-  - `macos.*.log` (macOS): a copy of the system log's lines about USB, the
-    smart-card service and sleep/wake. macOS itself keeps them only for a day
-    or two.
-- **Sending logs:** tray menu → **Upload logs** copies all of the above to the
-  "Logs" Firebase project and shows where they went, e.g.
-  `nfc-browser-bridge/Users-Mac-mini-1A2B3C4D/20261028T180000Z_v1.0.7`: the
-  computer's name, the start of its hardware UUID (Windows: machine GUID) to
-  tell apart computers with the same name, then the upload time in UTC. Find
-  that folder under Storage in the
-  [Firebase console](https://console.firebase.google.com/project/logs-wvmye/storage).
-  The app can only add files there; it cannot read, change or delete any.
-- **Reader plugged in but not working:** on macOS the bridge resets a reader
-  that is on USB but not listed by the smart-card service, that the system log
-  shows its USB driver stopped reading from (it beeps at tags but none are
-  reported), or whose card stops answering, as if it had been replugged (see
-  [PROTOCOL.md](docs/PROTOCOL.md#reader-recovery)). If two resets do not help,
-  the log says "it needs unplugging and plugging back in".
-- **"Port 38241 in use by another app":** another program listens on the
-  bridge's port. The bridge retries every 5 seconds.
-- **Unattended use:** the app runs the bridge as a child process and starts it
-  again if it crashes or a reader call hangs for 30 seconds (the log says
-  "bridge exited abnormally; restarting"). Only **Quit** stops it for good.
-- **"Smart card service unavailable" (macOS) / "No reader connected" (Windows):**
-  Windows stops its smart-card service when the last reader is unplugged; plug
-  the reader in and the bridge reconnects automatically.
-- **Windows "installing device driver" pop-ups or `sharing_violation` errors:**
-  turn off Smart Card Plug and Play by setting the DWORD
-  `HKLM\SOFTWARE\Policies\Microsoft\Windows\ScPnP\EnableScPnP` to `0`.
-- **macOS driver:** Apple's own CCID driver (`usbsmartcardreaderd`) handled the
-  ACR1255U-J1 in testing, so ACS's macOS driver is not needed. Apple's driver
-  does not pass escape commands (`SCardControl`) to the reader.
+- **A website says the bridge isn't running:** check for the card icon in the
+  menu bar or system tray, and start NFC Browser Bridge if it's missing. Also
+  make sure Chrome is allowed to connect (see
+  [Allow the website in Chrome](#allow-the-website-in-chrome)).
+- **The reader beeps but nothing happens, or it stopped working:** on a Mac the
+  bridge notices a reader that has stopped working and restarts it by itself
+  within a few seconds. If it can't, unplug the reader, wait a few seconds, and
+  plug it back in.
+- **"No reader connected":** plug the reader in. The bridge picks it up by
+  itself, with no need to restart anything.
+- **"Port 38241 in use by another app":** another program is using the port the
+  bridge needs. Close that program; the bridge keeps trying every few seconds.
+- **The bridge crashed or froze:** it restarts itself. Only **Quit** stops it
+  for good.
+- **Windows shows "installing device driver" pop-ups, or reading fails with a
+  "sharing violation":** ask your IT administrator to turn off Smart Card Plug
+  and Play (the DWORD
+  `HKLM\SOFTWARE\Policies\Microsoft\Windows\ScPnP\EnableScPnP` set to `0`).
+- **Sending us logs:** choose **Upload logs** in the menu. A message shows a
+  folder name such as
+  `nfc-browser-bridge/Kiosk-Mac-mini-1A2B3C4D/20261108T133654Z_v1.0.10`; send us
+  that name. The logs hold the last 7 days of the bridge's activity: readers
+  coming and going, the IDs of tags that were tapped, and the addresses of the
+  websites that connected. On a Mac they also include the computer's own
+  messages about USB and card readers. **Open log folder** shows them on your
+  computer.
 
-## Development
+## For developers
 
-```sh
-cargo test --workspace                       # Rust (uses FakePcsc, no hardware)
-cargo run -p bridge-app                      # tray app from source
-cargo run -p bridge-core --example serve     # bridge without the tray
-(cd client && npm ci && npm test)            # client library
-(cd web && npm ci && npm run dev)            # test site at http://localhost:5173/nfc-browser-bridge/
-```
-
-Hardware tools and the release checklist are in
-[docs/HARDWARE.md](docs/HARDWARE.md). Releases are published by running
-[`.github/workflows/release.yml`](.github/workflows/release.yml) from the
-Actions tab. Each run is numbered automatically as the next `v1.0.N` (the
-series comes from the workspace version in `Cargo.toml`; never create `v*` tags
-by hand). Its release notes are that version's section of
-[CHANGELOG.md](CHANGELOG.md), written for the people using the app rather than
-developers; add the `## 1.0.N` section before running it, or the run stops
-before building (`scripts/release-notes.sh 1.0.N` shows what will be published). Local builds show the latest release tag in their history instead,
-plus `+<commits>.g<hash>` when they're past it (e.g. `1.0.6+3.g0d486f9`); run
-`git fetch --tags` to pick up new releases. The release job signs each
-installer with [minisign](https://jedisct1.github.io/minisign/) using the
-`MINISIGN_SECRET_KEY` repository secret (an unencrypted key, made with
-`minisign -G -W`); its public half is
-[`crates/bridge-app/release-key.pub`](crates/bridge-app/release-key.pub), which
-the app trusts. Changing the key means apps that have the old key must be
-updated by hand once. The test site is published to GitHub Pages by
-[`pages.yml`](.github/workflows/pages.yml).
-
-The log upload bucket's rules and 90-day auto-delete live in the logs-backend repo.
+How websites talk to the bridge, the TypeScript client library and the build
+instructions are in [docs/PROTOCOL.md](docs/PROTOCOL.md), [client/](client/)
+and [CLAUDE.md](CLAUDE.md).
 
 ## License
 
