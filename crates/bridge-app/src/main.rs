@@ -374,12 +374,15 @@ fn keep_out_of_app_nap() {
 }
 
 fn icon(state: IconState) -> Icon {
-    let (size, template) = if TEMPLATE_ICONS {
-        (44, true)
+    // macOS: 22 pt tall @2x, wide enough for the glyph at full menu-bar height. Windows tray
+    // icons must be square.
+    let (width, height, template) = if TEMPLATE_ICONS {
+        (60, 44, true)
     } else {
-        (32, false)
+        (32, 32, false)
     };
-    Icon::from_rgba(icons::rgba(state, size, template), size, size).expect("valid icon dimensions")
+    Icon::from_rgba(icons::rgba(state, width, height, template), width, height)
+        .expect("valid icon dimensions")
 }
 
 fn set_icon(tray: &TrayIcon, state: IconState) -> tray_icon::Result<()> {

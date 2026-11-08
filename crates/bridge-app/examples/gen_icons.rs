@@ -8,7 +8,7 @@ use bridge_app::icons::{IconState, rgba};
 
 fn png(size: u32) -> Vec<u8> {
     // Glyph on a white rounded tile so it reads on any background.
-    let glyph = rgba(IconState::Ready, size, false);
+    let glyph = rgba(IconState::Ready, size, size, false);
     let mut out = Vec::with_capacity(glyph.len());
     let r = size as f32 * 0.18;
     for y in 0..size {
