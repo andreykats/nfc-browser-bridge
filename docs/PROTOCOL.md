@@ -199,7 +199,9 @@ that is stuck after a failed command. Result: `{"atr":"3B8F..."}`.
 Resets every smart-card reader on USB, the software equivalent of unplugging
 it and plugging it back in (the reader keeps its power). For a staff "reset
 reader" button. Result: `{"reset":["ACS ACR1255U-J1"]}`, the readers that were
-reset. Fails with `unsupported` where the bridge cannot see USB.
+reset. Fails with `unsupported` where the bridge cannot see USB. While the
+readers come back (up to 10 s, as after the bridge's own resets), a reader
+missing from the smart-card service is not treated as trouble.
 
 ## Responses
 

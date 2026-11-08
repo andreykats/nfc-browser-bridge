@@ -127,15 +127,30 @@ pub enum Action {
 #[derive(Debug)]
 pub struct Ladder {
     stage: Stage,
+    /// A missing reader is not noticed before this time: readers a client asked to reset are
+    /// still coming back.
+    settle_until: Option<Instant>,
 }
 
 impl Default for Ladder {
     fn default() -> Self {
-        Self { stage: Stage::Idle }
+        Self {
+            stage: Stage::Idle,
+            settle_until: None,
+        }
     }
 }
 
 impl Ladder {
+    /// A fresh ladder after resets a client asked for: readers get until `until` to come back
+    /// before a missing one counts, as after the ladder's own resets.
+    pub fn settling(until: Instant) -> Self {
+        Self {
+            settle_until: Some(until),
+            ..Self::default()
+        }
+    }
+
     pub fn state(&self) -> RecoveryState {
         match self.stage {
             Stage::Idle | Stage::Noticed { .. } => RecoveryState::Idle,
@@ -166,6 +181,9 @@ impl Ladder {
                 // Nothing short of re-enumerating fixes a reader the driver stopped reading from,
                 // and the worker already reset an unresponsive card itself: go straight to USB.
                 Trouble::NotReporting { .. } | Trouble::Unresponsive(_) => reset(1),
+                Trouble::Missing if self.settle_until.is_some_and(|t| now < t) => {
+                    (Stage::Idle, None)
+                }
                 Trouble::Missing => (Stage::Noticed { since: now }, None),
             },
             Stage::Noticed { since } if now - since >= c.missing_grace => {
@@ -264,8 +282,9 @@ impl Recovery {
             ));
         };
         let done = self.reset(&readers, reason);
-        // Start over: this was the ladder's next step anyway.
-        self.lock().ladder = Ladder::default();
+        // Start over: this was the ladder's next step anyway. The readers are out of the
+        // smart-card service until they re-enumerate, which is not trouble yet.
+        self.lock().ladder = Ladder::settling(Instant::now() + self.config.reset_wait);
         Ok(done)
     }
 
@@ -554,6 +573,26 @@ mod tests {
         // Back within the grace period: nothing was done, so nothing recovered either.
         assert_eq!(l.step(t0 + Duration::from_secs(2), None, &c), None);
         assert_eq!(l.state(), RecoveryState::Idle);
+    }
+
+    #[test]
+    fn readers_reset_by_a_client_get_time_to_come_back() {
+        let c = config();
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let missing = Some(&Trouble::Missing);
+        let mut l = Ladder::settling(t0 + c.reset_wait);
+        // Out of the service while re-enumerating: not trouble.
+        assert_eq!(l.step(at(0), missing, &c), None);
+        assert_eq!(l.step(at(9), missing, &c), None);
+        assert_eq!(l.state(), RecoveryState::Idle);
+        // Back in time: nothing was done, so nothing recovered either.
+        assert_eq!(l.step(at(9), None, &c), None);
+        // Still missing once the time is up: the usual ladder, grace period first.
+        let mut l = Ladder::settling(t0 + c.reset_wait);
+        assert_eq!(l.step(at(10), missing, &c), None);
+        assert_eq!(l.step(at(14), missing, &c), None);
+        assert_eq!(l.step(at(15), missing, &c), Some(Action::Reopen));
     }
 
     #[test]

@@ -110,6 +110,8 @@ USB reset and recovery (macOS, 2026-11-06): the ignored hardware tests in
 ACR1552U and an NTAG215. They cover re-enumeration, the reader coming back with
 its tag still answering, a logged USB fault leading to a reset, and a real
 reset not being taken for a fault.
+Run again on 2026-11-08 (macOS, ACR1255U-J1, NTAG215) after the fix that
+gives readers reset by a client time to come back: all four passed.
 
 Partial results so far (macOS, ACR1255U-J1, NTAG215 only, built from source):
 read/write/full-capacity/erase verified with the hardware test; tray menu,
