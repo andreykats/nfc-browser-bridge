@@ -72,30 +72,46 @@ pub fn spawn(
 }
 
 fn upload(version: &str) -> Result<Uploaded, UploadError> {
-    let dir = crate::logging::log_dir().ok_or(UploadError::NoLogDir)?;
+    let dir = crate::log_dir().ok_or(UploadError::NoLogDir)?;
     let files = log_files(&dir)?;
     let folder = folder(&host_name(), OffsetDateTime::now_utc(), version);
     // Logged first, so the uploaded log shows which upload it belongs to.
     tracing::info!(%folder, files = files.len(), "uploading logs");
-    let agent = http::agent(TIMEOUT);
+    let agent = agent();
     for (done, (name, path)) in files.iter().enumerate() {
         let body = std::fs::read(path).map_err(|e| UploadError::Read(path.clone(), e))?;
-        agent
-            .post(ENDPOINT)
-            .query("name", format!("{folder}/{name}"))
-            .header("Content-Type", "text/plain")
-            .send(&capped(body, MAX_BYTES)[..])
-            .map_err(|error| UploadError::Send {
-                file: name.clone(),
-                done,
-                total: files.len(),
-                error,
-            })?;
+        send(&agent, &folder, name, body).map_err(|error| UploadError::Send {
+            file: name.clone(),
+            done,
+            total: files.len(),
+            error,
+        })?;
     }
     Ok(Uploaded {
         folder,
         files: files.len(),
     })
+}
+
+/// An HTTPS client with the upload timeout.
+pub fn agent() -> ureq::Agent {
+    http::agent(TIMEOUT)
+}
+
+/// Upload one text file as `<folder>/<name>`, capped below the bucket's size limit. The bucket's
+/// rules decide which names are accepted.
+pub fn send(
+    agent: &ureq::Agent,
+    folder: &str,
+    name: &str,
+    body: Vec<u8>,
+) -> Result<(), ureq::Error> {
+    agent
+        .post(ENDPOINT)
+        .query("name", format!("{folder}/{name}"))
+        .header("Content-Type", "text/plain")
+        .send(&capped(body, MAX_BYTES)[..])
+        .map(|_| ())
 }
 
 /// The bridge's log files in `dir` (and on macOS the system log copies), by name.
@@ -133,7 +149,8 @@ fn is_log_file(name: &str) -> bool {
         })
 }
 
-fn folder(host: &str, now: OffsetDateTime, version: &str) -> String {
+/// A new upload folder: `nfc-browser-bridge/<host>/<UTC time>_v<version>`.
+pub fn folder(host: &str, now: OffsetDateTime, version: &str) -> String {
     format!(
         "nfc-browser-bridge/{host}/{:04}{:02}{:02}T{:02}{:02}{:02}Z_v{version}",
         now.year(),
@@ -147,7 +164,7 @@ fn folder(host: &str, now: OffsetDateTime, version: &str) -> String {
 
 /// The computer's name as set in System Settings / Windows, then its hardware ID: names repeat
 /// (every Mac mini set up with the account "User" is "Users-Mac-mini"), the ID tells them apart.
-fn host_name() -> String {
+pub fn host_name() -> String {
     #[cfg(target_os = "macos")]
     let raw = std::process::Command::new("scutil")
         .args(["--get", "LocalHostName"])

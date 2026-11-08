@@ -3,7 +3,6 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod autostart;
-mod http;
 mod install;
 mod instance;
 mod logging;
@@ -12,7 +11,6 @@ mod menu;
 mod oslog;
 mod supervisor;
 mod update;
-mod upload;
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -29,6 +27,7 @@ use tray_icon::menu::MenuEvent;
 use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
 
 use bridge_app::icons::{self, IconState};
+use bridge_app::{http, upload};
 use install::{InstallError, Next};
 use menu::{AppState, MenuModel};
 use update::UpdateInfo;

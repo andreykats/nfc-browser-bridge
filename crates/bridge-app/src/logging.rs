@@ -1,18 +1,10 @@
 //! Daily-rotated log files (7 kept): ~/Library/Logs/NFCBrowserBridge on macOS,
 //! %LOCALAPPDATA%\NFCBrowserBridge\logs on Windows.
 
-use std::path::PathBuf;
-
+pub use bridge_app::log_dir;
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::writer::MakeWriterExt;
-
-pub fn log_dir() -> Option<PathBuf> {
-    #[cfg(target_os = "macos")]
-    return dirs::home_dir().map(|h| h.join("Library/Logs/NFCBrowserBridge"));
-    #[cfg(not(target_os = "macos"))]
-    return dirs::data_local_dir().map(|d| d.join("NFCBrowserBridge").join("logs"));
-}
 
 /// Start logging. `RUST_LOG` overrides the level (e.g. `RUST_LOG=debug` logs APDUs).
 ///
