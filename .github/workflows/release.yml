@@ -27,6 +27,9 @@ jobs:
           [ -n "$base" ] || { echo "No workspace version in Cargo.toml" >&2; exit 1; }
           last=$(git ls-remote --tags --refs origin "v$base.*" | sed -E "s#^.*/v$base\.##" | grep -E '^[0-9]+$' | sort -n | tail -1)
           echo "version=$base.$(( ${last:-0} + 1 ))" >> "$GITHUB_OUTPUT"
+      # Stop before building if CHANGELOG.md has no notes for this version.
+      - name: Check release notes
+        run: scripts/release-notes.sh "${{ steps.v.outputs.version }}"
 
   macos:
     needs: version
@@ -125,8 +128,9 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          scripts/release-notes.sh "${{ needs.version.outputs.version }}" > "$RUNNER_TEMP/notes.md"
           gh release create "v${{ needs.version.outputs.version }}" dist/* \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "NFC Browser Bridge ${{ needs.version.outputs.version }}" \
-            --generate-notes
+            --notes-file "$RUNNER_TEMP/notes.md"

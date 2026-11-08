@@ -178,7 +178,10 @@ Hardware tools and the release checklist are in
 [`.github/workflows/release.yml`](.github/workflows/release.yml) from the
 Actions tab. Each run is numbered automatically as the next `v1.0.N` (the
 series comes from the workspace version in `Cargo.toml`; never create `v*` tags
-by hand). Local builds show the latest release tag in their history instead,
+by hand). Its release notes are that version's section of
+[CHANGELOG.md](CHANGELOG.md), written for the people using the app rather than
+developers; add the `## 1.0.N` section before running it, or the run stops
+before building (`scripts/release-notes.sh 1.0.N` shows what will be published). Local builds show the latest release tag in their history instead,
 plus `+<commits>.g<hash>` when they're past it (e.g. `1.0.6+3.g0d486f9`); run
 `git fetch --tags` to pick up new releases. The release job signs each
 installer with [minisign](https://jedisct1.github.io/minisign/) using the
