@@ -3,8 +3,9 @@
 The README is for the people who install and use the app; keep it free of
 developer detail. Technical notes go here, in [docs/PROTOCOL.md](docs/PROTOCOL.md)
 (the wire protocol and reader recovery) and in [docs/HARDWARE.md](docs/HARDWARE.md)
-(hardware findings and the release checklist). Work planned for later is in
-[TODO.md](TODO.md).
+(hardware findings and the release checklist). How the app is tested is in
+[TESTING.md](TESTING.md); keep it current when tests change. Work planned for
+later is in [TODO.md](TODO.md).
 
 ## What it is
 
@@ -48,8 +49,9 @@ service (PC/SC) to web pages over a WebSocket at `ws://127.0.0.1:38241/v1`.
 ## Commands
 
 ```sh
+cargo fmt --all --check                      # CI fails on unformatted code
+cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace                       # Rust (FakePcsc and FakeUsb, no hardware)
-cargo clippy --workspace --all-targets
 cargo run -p bridge-app                      # tray app from source
 cargo run -p bridge-core --example serve     # bridge without the tray
 (cd client && npm ci && npm test)            # client library
@@ -67,6 +69,39 @@ docs/HARDWARE.md. Real-reader tests are ignored by default:
   user when to do it.
 - `cd client && BRIDGE_HW=1 npx vitest run test/hardware.test.ts`: read, write,
   full-capacity write, erase and restore on a real tag through a running bridge.
+
+## Testing rules (enforce these)
+
+- **Before every commit** run all of CI's checks for what changed: the three
+  Rust commands above for Rust changes, `npx tsc --noEmit && npm test` in
+  `client/` or `web/` for TypeScript changes. Don't commit with any failing.
+  After a push, check `gh run list --workflow ci.yml --limit 1`.
+- **Reader code needs a real reader.** A change to any of these must pass the
+  hardware tests on a Mac with a reader before it is committed as tested or
+  released:
+
+  | Changed | Run |
+  | --- | --- |
+  | `bridge-core/src/` `monitor.rs`, `worker.rs`, `real.rs`, `backend.rs`, `recovery.rs`, `health.rs`, `usb.rs`, `usb_macos.rs`, `usb_log.rs`; `bridge-app/src/oslog.rs`; the `pcsc` dependency | Rust hardware tests (all four) |
+  | `bridge-core/src/` `worker.rs`, `protocol.rs`, `server.rs`; `client/src/` `client.ts`, `ntag.ts`, `ndef.ts`, `tlv.ts`, `protocol.ts` | client hardware test |
+
+  Use judgment beyond the table: a comment-only or log-message-only change
+  doesn't need it, and a change elsewhere that alters how readers or cards are
+  handled does. Say which you ran, or why none was needed. If no reader is
+  available, leave the change uncommitted and tell the user which test is
+  owed; don't release it.
+- Never run the hardware tests on the production kiosk while it's in use: they
+  reset every reader.
+- **Windows is not tested with real readers** until a later date. Don't
+  describe Windows as tested; CI covers it with the fake reader only.
+- **Long-running test:** the staging Mac mini (`Mac-mini-F6E28B59`) runs the
+  latest release for days (TESTING.md; not set up yet, see TODO.md). Once it
+  is set up, check its latest summary before dispatching a release and report
+  any failures.
+- **Releases can't skip tests.** `release.yml` calls `ci.yml` and publishes
+  only if it passes. Don't remove that dependency or publish any other way. A
+  failure in the known-flaky Windows test (see Releases) is rerun, not
+  bypassed.
 
 To try the app with a fake version (to see the update flow), build with
 `BRIDGE_VERSION=1.0.8 cargo build -p bridge-app`. Don't click its update item:
@@ -90,8 +125,12 @@ it would replace that app with the release.
   the series comes from the workspace version in `Cargo.toml`. Never create `v*`
   tags by hand. Before dispatching, run
   `gh run list --workflow release.yml --limit 3` and check the tags: an
-  interrupted call may already have published a release. Watch the run in the
-  background.
+  interrupted call may already have published a release. Also check that CI
+  passed on the commit being released and that any hardware tests it owes
+  (see Testing rules) were run. Watch the run in the background.
+- The run's `tests` job is the whole of `ci.yml` on the released commit. The
+  macOS and Windows builds run alongside it, but nothing is published unless it
+  passes. If only the flaky Windows test failed, `gh run rerun <id> --failed`.
 - The release notes are that version's `## 1.0.N` section of CHANGELOG.md.
   Without one, the run stops before building. `scripts/release-notes.sh 1.0.N`
   prints what will be published.

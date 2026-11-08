@@ -33,8 +33,9 @@ straight away.
 - **Tested** means tags were read on a Mac, and the bridge's automatic reader
   recovery was checked with that reader.
 - **Windows:** the Windows version is built and released, but it hasn't been
-  tested with any reader yet. It also lacks some of the Mac version's features
-  (see [Mac and Windows](#mac-and-windows)).
+  tested with a real reader, and won't be until a later release. Until then,
+  treat it as untested. It also lacks some of the Mac version's features (see
+  [Mac and Windows](#mac-and-windows)).
 - **Drivers:** the bridge uses the generic smart-card reader driver that comes
   with the operating system, not the drivers the reader's manufacturer (ACS)
   publishes. The readers above were tested only with the driver built into
@@ -59,7 +60,9 @@ supported. Any card's ID (UID) can be read.
 
 The Mac version is the more complete one. It's the one in daily use, and it can
 fix a stuck reader by itself. The Windows version does the same basic job but
-can't do that yet.
+can't do that yet, and it hasn't been tested with a real reader: that's
+planned for a later release. Its automatic tests run against a simulated
+reader only.
 
 | | Mac | Windows |
 | --- | --- | --- |
@@ -182,7 +185,8 @@ websites connected right now. Quit the bridge when you don't need it.
 
 How websites talk to the bridge, the TypeScript client library and the build
 instructions are in [docs/PROTOCOL.md](docs/PROTOCOL.md), [client/](client/)
-and [CLAUDE.md](CLAUDE.md).
+and [CLAUDE.md](CLAUDE.md). How the bridge is tested is in
+[TESTING.md](TESTING.md).
 
 ## License
 

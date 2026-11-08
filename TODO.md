@@ -64,3 +64,24 @@ script, fetch `https://developer.apple.com/tutorials/data/documentation/<path>.j
 The Windows installer is unsigned too, so SmartScreen warns on a first install.
 Signing it needs a separate code-signing certificate; that's a separate
 decision, not part of this item.
+
+## Long-running staging test
+
+**Why:** some failures only show up after days of running, like the kiosk
+reader that stopped reporting tags for 17.5 hours. [TESTING.md](TESTING.md)
+describes the setup this builds: the Mac mini `Mac-mini-F6E28B59` runs the
+latest release with the kiosk app and a tag-read probe, and uploads a summary
+and logs.
+
+- [ ] Probe script: connect to the bridge, read the tag on the reader every
+      minute, append each result (time, OK or error, latency) to a local file,
+      and write a daily pass/fail summary.
+- [ ] Storage rule in the logs-bucket repo allowing the summary file under the
+      bridge's folder, then deploy it.
+- [ ] Upload the summary and the bridge's logs to the bucket daily.
+- [ ] On the Mac mini: install the bridge from the latest release, the kiosk
+      app in Chrome (as on the production kiosk), and a LaunchAgent that keeps
+      the probe running.
+- [ ] Release step: check the latest staging summary before dispatching a
+      release, and report any failures.
+- [ ] Fill in the setup steps in TESTING.md.

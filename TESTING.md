@@ -1,0 +1,236 @@
+# How NFC Browser Bridge is tested
+
+The bridge is tested at four levels:
+
+1. **Automated tests:** they run on every push and before every release, against
+   a simulated reader.
+2. **Hardware tests:** they need a real reader on a Mac, and are required
+   whenever reader code changes.
+3. **The release checklist:** done by hand on real machines.
+4. **A long-running test:** planned for a staging Mac mini.
+
+The macOS version is the tested one. The Windows version is built, and its
+automated tests run on every push, but it **has not been tested with a real
+reader** and won't be until a later release.
+
+## Summary
+
+| Level | What runs | Where | When |
+| --- | --- | --- | --- |
+| Automated, Rust | Format check, clippy, 74 tests incl. 26 end-to-end | GitHub Actions on macOS and Windows | Every push, and every release |
+| Automated, TypeScript | Type check, 48 client library tests, 4 test-site tests | GitHub Actions on Linux | Every push, and every release |
+| Hardware, Rust | 4 tests with a real reader | A Mac with a reader | When reader code changes |
+| Hardware, client | Read/write/erase on a real tag | A Mac with a reader and a tag | When tag or protocol code changes |
+| Release checklist | Install, replug, sleep, read/write, two tabs… | Real machines, by hand | Before major releases |
+| Long-running | The bridge running for days with a reader | Staging Mac mini | Planned (see below) |
+
+## 1. Automated tests
+
+### Where they run
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and
+pull request:
+
+- **Rust, on `macos-latest` and `windows-latest`:**
+  - `cargo fmt --all --check`
+  - `cargo clippy --workspace --all-targets -- -D warnings`: any warning
+    fails the build.
+  - `cargo test --workspace`
+- **TypeScript, on Linux, for `client/` and `web/`:** `npm ci`,
+  `npx tsc --noEmit` and `npm test` (vitest).
+
+**Releases can't skip them.** [`release.yml`](.github/workflows/release.yml)
+calls `ci.yml` as its `tests` job, on the exact commit being released. The
+macOS and Windows installers build alongside it, but the `release` job that
+signs and publishes needs `tests` to pass. A failing test means nothing is
+published.
+
+To run the same checks locally:
+
+```sh
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+(cd client && npm ci && npx tsc --noEmit && npm test)
+(cd web && npm ci && npx tsc --noEmit && npm test)
+```
+
+### The simulated reader and USB
+
+Most of the bridge talks to the operating system through two interfaces: the
+smart-card service (PC/SC) and USB. The tests swap both for scriptable fakes in
+[`crates/bridge-core/src/fake.rs`](crates/bridge-core/src/fake.rs):
+
+- **`FakePcsc`** simulates the smart-card service. Tests can plug and unplug
+  readers, place and lift cards, script card answers and errors, make calls
+  hang, and stop or restart the service.
+- **`FakeUsb`** simulates readers on USB. Tests can make a reader disappear
+  from PC/SC while it stays on USB, and record USB resets.
+
+Because the fakes behave the same on every platform, the Mac-only reader
+recovery logic is also exercised on the Windows runner. Only the real USB
+access (`usb_macos.rs`) and the real system log are left for the hardware
+tests.
+
+### End-to-end tests (`crates/bridge-core/tests/bridge.rs`)
+
+These 26 tests start the whole bridge (monitor, worker, recovery, WebSocket
+server) on top of the fakes and talk to it with a real WebSocket client, the
+way a web page does.
+
+| Area | Tests |
+| --- | --- |
+| Readers and cards | Cards already present are listed on connect; hot-plug and card events; polling the reader list when the OS has no plug-and-play notifications; a vanished reader doesn't spin the monitor; one handle is held while a card is present; a UID read is retried after a glitch |
+| Reading and writing | Reads and writes go in one batch; stop-on-error, and a reset recovers a wedged card; a PC/SC error resets the card and reports progress; sharing violations are retried three times; card errors map to the right error codes |
+| Smart-card service | Recovers after the service stops; persistent errors re-establish the context; a hung card call is reported as a stall |
+| Security and protocol | Request validation and the write guard (NTAG pages 0–3); oversized messages close the connection; the Host header and path are checked |
+| Clients | Two clients share events, and their batches don't interleave; the port being in use is reported |
+| USB recovery (macOS logic) | USB readers and recovery state are reported; a reader lost by PC/SC is reset over USB; recovery gives up after two resets and starts over on replug; an unresponsive card is reset over USB without a new tap; "reset readers" resets every USB reader; a reader that stopped reporting cards is reset; USB errors that aren't a reader fault are ignored |
+
+`an_unresponsive_card_is_reset_over_usb_without_a_new_tap` depends on timing
+and sometimes fails on the Windows runner. Rerun the failed job; don't skip it.
+
+### Unit tests
+
+**`bridge-core`** (the bridge itself):
+
+| File | What's tested |
+| --- | --- |
+| `protocol.rs` | Hex encoding, reader kinds, parsing requests, APDU validation, the write guard, how errors and status are sent |
+| `recovery.rs` | The recovery ladder for a missing reader; a short gap isn't treated as trouble; a silent reader or an unresponsive card goes straight to a USB reset |
+| `usb_log.rs` | Parsing the kernel's USB transfer error; a fault needs both the kernel and driver lines, in either order, with no teardown nearby; a reader going away isn't a fault; matching the reader by port, else by name |
+| `usb.rs` | Matching USB readers to PC/SC names; describing a reader's identity for the log |
+| `real.rs` | Error codes and state bits match the `pcsc` crate |
+| `health.rs` | Only long calls are reported as stalls |
+| `server.rs` | How connecting websites are labelled |
+
+**`bridge-app`** (the tray app):
+
+| File | What's tested |
+| --- | --- |
+| `install.rs` | The release key parses; signatures verify while copying; a signature from another key, or one naming another version or file, is rejected; the Windows setup command; swapping app folders; finding the bundle |
+| `update.rs` | Version comparison; finding the installer and its signature in a release |
+| `upload.rs` | Log file names; the upload folder name; machine names; reading the hardware UUID; large files keep their last whole lines; only log files are listed |
+| `menu.rs` | Menu contents for ready-with-card, no reader, port conflict, an update on offer, and Check for updates |
+| `autostart.rs` | Start-at-login entries, and refusing temporary locations |
+| `icons.rs` | Icon sizes and states; on the wide macOS canvas the card fills the target height and all states match |
+
+Three tests here are ignored by default because they reach outside the
+machine or change real files. Run them by hand when that code changes:
+
+- `install.rs`, `replaces_a_bundle_from_a_disk_image`: macOS.
+- `update.rs`, `reaches_github_over_os_tls`
+- `upload.rs`, `uploads_to_the_logs_bucket`: writes to the real logs bucket.
+
+### TypeScript tests
+
+**`client/`**, the library websites use (48 tests):
+
+| File | What's tested |
+| --- | --- |
+| `client.test.ts` | Cards present at connect aren't reported as taps; reconnecting with backoff without replaying a present card; request timeouts scaled to batch size; error mapping; refusing another protocol version; two clients sharing one bridge; USB reader and recovery state; resetting readers |
+| `ndef.test.ts` | URI and Text records (every prefix, UTF-8 and UTF-16), every TNF, long and multi-record messages, rejecting malformed messages, choosing the record a kiosk matches on |
+| `ntag.test.ts` | Recognising Type 2 tags; reading blank and written tags in at most two batches; writing up to an NTAG216's capacity and never outside user memory; read-only tags; the ACR1552 write fallback; **a card lifted mid-write leaves an empty or valid tag**; write order |
+| `tlv.test.ts` | Finding the NDEF TLV past padding and control TLVs, both length forms, cut-off headers, overruns |
+
+These run against `client/src/fakeBridge.ts`, a fake bridge in the browser.
+
+**`web/`**, the test site (4 tests): building records from the form, input
+validation, counting bytes against the tag's capacity, and parsing typed APDUs.
+
+## 2. Hardware tests (real reader, macOS)
+
+The automated tests can't show that the real smart-card service, the real USB
+stack and the macOS system log behave the way the fakes assume. That's what the
+hardware tests are for. They're marked `#[ignore]` (or need `BRIDGE_HW=1`), so
+CI never runs them.
+
+**Rust**, in [`crates/bridge-core/tests/hardware.rs`](crates/bridge-core/tests/hardware.rs):
+
+```sh
+cargo test -p bridge-core --test hardware -- --ignored --test-threads=1 --nocapture
+```
+
+| Test | Needs | Checks |
+| --- | --- | --- |
+| `usb_reset_re_enumerates_the_reader_and_pcsc_drops_and_relists_it` | Reader | A real USB reset re-enumerates the reader, and PC/SC drops and lists it again |
+| `reset_readers_brings_the_reader_back_with_its_tag_still_answering` | Reader and tag | After a reset, the reader comes back with its tag still answering, without a new tap |
+| `a_usb_fault_in_the_system_log_resets_the_reader` | Reader and tag; someone to lift the tag and put it back within 60 s | A fault in the live system log leads to a reset, and taps work afterwards |
+| `a_usb_reset_in_the_live_system_log_is_not_a_fault` | Reader | The log lines from a real reset aren't mistaken for a fault |
+
+**Client**, with a bridge running and a tag on the reader:
+
+```sh
+cd client && BRIDGE_HW=1 npx vitest run test/hardware.test.ts
+```
+
+This test reads the tag, writes every record type, fills it to capacity, erases
+it, and restores what was on it.
+
+**When they're required.** Any change to reader code must pass the hardware
+tests before it's committed as tested or released. CLAUDE.md lists which files
+count and which test each one needs, and agents working on the repo enforce
+this. If no reader is available, the change stays uncommitted until one is.
+
+**Caution:** the Rust hardware tests reset every reader on USB. Never run them
+on the production kiosk while it's in use.
+
+The last full run (2026-11-06, macOS, ACR1255U-J1 and ACR1552U, NTAG215)
+passed. [docs/HARDWARE.md](docs/HARDWARE.md) keeps the record of results.
+
+## 3. Release checklist (by hand)
+
+[docs/HARDWARE.md](docs/HARDWARE.md#release-checklist) has the manual
+checklist. It covers:
+
+- installing from the release files
+- start at login
+- unplugging and replugging the reader, and sleep and wake
+- reading and writing every record type, including a full-capacity NTAG216
+- lifting the card in the middle of a write
+- using the bridge from two browser tabs
+- quitting and relaunching while a page is open
+- a reader left idle for 30 minutes
+- the "Apps on device" permission in Chrome
+
+Each check is marked done only after it has been seen working on a real
+machine. The Windows column stays empty until Windows testing with real
+readers begins.
+
+## 4. Long-running test (staging Mac mini)
+
+**Planned, not set up yet.** Some failures only show up after days of running.
+The production kiosk's reader once stopped reporting tags and stayed that way
+for 17.5 hours. The staging setup runs the bridge the way the kiosk does, all
+the time, so problems like that show up there too.
+
+- **Machine:** the Mac mini `Mac-mini-F6E28B59`, which is not the production
+  kiosk. It has a reader of the same model as the kiosk, with a tag left on
+  it.
+- **What it runs:** always the **latest release**, installed and kept up to
+  date by the app's own updater, the same way as the kiosk. Staging doesn't
+  hold back releases; it finds problems alongside the kiosk, or before the
+  kiosk updates.
+- **What it does:**
+  - **The kiosk app:** it runs in Chrome against the bridge, exactly like
+    production.
+  - **A tag-read probe:** a script reads the tag through the bridge every
+    minute and records whether it answered and how long it took. This catches
+    a reader that stops reporting tags without anyone tapping.
+- **Results:** the probe writes a pass/fail summary. The summary and the
+  bridge's logs are uploaded to the shared logs bucket
+  (`gs://logs-wvmye.firebasestorage.app`) under the bridge's folder. Before
+  each release, an agent checks the latest staging summary and reports any
+  failures.
+
+Setup steps and the probe script will be added here once they're built.
+
+## What isn't tested
+
+- **Windows with real readers:** not until a later release. On Windows only the
+  automated tests run, against the simulated reader.
+- **How the menu bar icon and menu look on screen:** the tests check what's
+  drawn and listed, not the rendered result. Look at them in the real menu bar
+  after changing them.
+- **Readers other than the ACR1255U-J1 and the ACR1552U, and drivers other than
+  the one built into macOS.**
