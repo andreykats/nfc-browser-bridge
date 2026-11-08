@@ -141,7 +141,10 @@ mod tests {
         let (w, h) = (60, 44);
         let (top, bottom) = ink_rows(&rgba(IconState::NoReader, w, h, false), w);
         let fill = (bottom - top + 1) as f32 / h as f32;
-        assert!((fill - MAX_CARD_FILL).abs() < 0.05, "card fills {fill} of the height");
+        assert!(
+            (fill - MAX_CARD_FILL).abs() < 0.05,
+            "card fills {fill} of the height"
+        );
         for state in [IconState::Ready, IconState::CardPresent] {
             assert_eq!(ink_rows(&rgba(state, w, h, false), w), (top, bottom));
         }
