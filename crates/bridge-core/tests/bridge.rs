@@ -968,11 +968,19 @@ async fn a_reader_that_stopped_reporting_cards_is_reset_over_usb() {
         reason.contains("stopped reporting cards after a USB error on endpoint 0x83"),
         "{reason}"
     );
-    // The tag that went unseen is reported now: it was never announced, so it is a new tap.
-    let present = recv_until(&mut ws, |v| v["event"] == "card_present").await;
-    assert_eq!(present["uid"], UID_HEX);
-    let back = recv_until(&mut ws, |v| v["event"] == "recovery").await;
-    assert_eq!(back["action"], "recovered");
+    // The tag that went unseen is reported now: it was never announced, so it is a new tap. The
+    // worker announces it and recovery reports the reader back independently, in either order.
+    let (mut present, mut back) = (None, None);
+    while present.is_none() || back.is_none() {
+        let v = recv(&mut ws).await;
+        match v["event"].as_str() {
+            Some("card_present") => present = Some(v),
+            Some("recovery") => back = Some(v),
+            _ => {}
+        }
+    }
+    assert_eq!(present.unwrap()["uid"], UID_HEX);
+    assert_eq!(back.unwrap()["action"], "recovered");
     assert_eq!(fake.usb_resets(), 1);
 
     // Later taps work as usual, with no further resets.
